@@ -22,3 +22,4 @@ A new Flutter project.
 - [X] Confirm before clear all
 - [X] Use window manager to create a desktop app with a custom window frame.
 - [ ] Import.
+- [ ] Fix: autofill, clear.
