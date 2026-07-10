@@ -36,6 +36,8 @@ void main() {
         id: 'fork_1_to_2',
         boundingBox: BoundingBox(width: 10, height: 15),
         spriteSheetRect: SpriteSheetRect(x: 32, y: 64, w: 160, h: 240),
+        category: BlockCategory.islandTile,
+        cornerType: CornerType.concave,
         ports: [
           Port(localGridX: 0, localGridY: 7, direction: PortDirection.left),
           Port(localGridX: 9, localGridY: 2, direction: PortDirection.right),
@@ -68,6 +70,8 @@ void main() {
       expect(decoded.spriteSheetRect.x, 32);
       expect(decoded.spriteSheetRect.h, 240);
       expect(decoded.ports, original.ports);
+      expect(decoded.category, BlockCategory.islandTile);
+      expect(decoded.cornerType, CornerType.concave);
       expect(decoded.autoDecals.single.type, DecalType.kerbGradient);
       expect(decoded.physicsTrackArea, original.physicsTrackArea);
       expect(decoded.physicsHardWalls.length, 2);
@@ -84,6 +88,9 @@ void main() {
       expect(decoded.ports, isEmpty);
       expect(decoded.physicsHardWalls, isEmpty);
       expect(decoded.checkLines, isEmpty);
+      // Legacy dicts without the new fields default sensibly.
+      expect(decoded.category, BlockCategory.track);
+      expect(decoded.cornerType, CornerType.none);
     });
   });
 

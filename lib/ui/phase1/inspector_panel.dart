@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/block_def.dart';
 import '../../models/port.dart';
 import '../../state/asset_definer_providers.dart';
 import '../widgets/port_marker.dart';
+import 'asset_definer_page.dart' show categoryLabel;
 
 /// Right-hand inspector for Phase 1: edits the selected mask's ID and
 /// its list of ports, and lists all defined blocks for quick selection.
@@ -57,6 +59,56 @@ class InspectorPanel extends ConsumerWidget {
               style: theme.textTheme.bodySmall,
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Row(
+              children: [
+                const Text('Category'),
+                const SizedBox(width: 8),
+                DropdownButton<BlockCategory>(
+                  value: mask.category,
+                  isDense: true,
+                  items: [
+                    for (final c in BlockCategory.values)
+                      DropdownMenuItem(
+                          value: c, child: Text(categoryLabel(c))),
+                  ],
+                  onChanged: (c) {
+                    if (c != null) {
+                      notifier.setMaskCategory(selectedIndex, c);
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+          if (mask.category == BlockCategory.islandTile)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+              child: Row(
+                children: [
+                  const Text('Corner'),
+                  const SizedBox(width: 8),
+                  DropdownButton<CornerType>(
+                    value: mask.cornerType,
+                    isDense: true,
+                    items: const [
+                      DropdownMenuItem(
+                          value: CornerType.none, child: Text('None / edge')),
+                      DropdownMenuItem(
+                          value: CornerType.convex, child: Text('Convex')),
+                      DropdownMenuItem(
+                          value: CornerType.concave, child: Text('Concave')),
+                    ],
+                    onChanged: (t) {
+                      if (t != null) {
+                        notifier.setMaskCornerType(selectedIndex, t);
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
             child: Text('Ports (${mask.ports.length})',

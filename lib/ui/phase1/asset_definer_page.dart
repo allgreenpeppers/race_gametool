@@ -1,9 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/block_def.dart';
 import '../../state/asset_definer_providers.dart';
 import 'inspector_panel.dart';
 import 'mask_canvas.dart';
+
+/// Short display label for each asset category.
+String categoryLabel(BlockCategory c) => switch (c) {
+      BlockCategory.track => 'Track',
+      BlockCategory.islandTile => 'Island',
+      BlockCategory.startLine => 'Start Line',
+    };
 
 /// Phase 1: load a raw draft image, mask track pieces with bounding boxes,
 /// define ports on their edges, then crop, bin-pack, and export
@@ -62,6 +70,24 @@ class AssetDefinerPage extends ConsumerWidget {
                 selected: {state.tool},
                 onSelectionChanged: (selection) =>
                     notifier.setTool(selection.first),
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('New: '),
+                  DropdownButton<BlockCategory>(
+                    value: state.newBlockCategory,
+                    isDense: true,
+                    items: [
+                      for (final c in BlockCategory.values)
+                        DropdownMenuItem(
+                            value: c, child: Text(categoryLabel(c))),
+                    ],
+                    onChanged: (c) {
+                      if (c != null) notifier.setNewBlockCategory(c);
+                    },
+                  ),
+                ],
               ),
               FilledButton.icon(
                 onPressed: state.canExport ? notifier.saveBundle : null,

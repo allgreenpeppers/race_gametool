@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/constants.dart';
 import '../logic/asset_bundle.dart';
 import '../logic/port_placement.dart';
+import '../models/block_def.dart';
 import '../models/mask_draft.dart';
 import '../models/port.dart';
 import 'app_providers.dart';
@@ -64,6 +65,7 @@ class AssetDefinerState {
     this.dragPreview,
     this.paintPreview,
     this.movePreview,
+    this.newBlockCategory = BlockCategory.track,
     this.statusMessage,
   });
 
@@ -87,6 +89,9 @@ class AssetDefinerState {
   /// Block reposition in progress (Move tool).
   final MovePreview? movePreview;
 
+  /// Category assigned to newly drawn/painted masks.
+  final BlockCategory newBlockCategory;
+
   /// One-shot feedback line shown in the toolbar (load/export results,
   /// rejected port placements).
   final String? statusMessage;
@@ -106,6 +111,7 @@ class AssetDefinerState {
     DragPreview? Function()? dragPreview,
     Set<Cell>? Function()? paintPreview,
     MovePreview? Function()? movePreview,
+    BlockCategory? newBlockCategory,
     String? Function()? statusMessage,
   }) =>
       AssetDefinerState(
@@ -120,6 +126,7 @@ class AssetDefinerState {
         paintPreview:
             paintPreview != null ? paintPreview() : this.paintPreview,
         movePreview: movePreview != null ? movePreview() : this.movePreview,
+        newBlockCategory: newBlockCategory ?? this.newBlockCategory,
         statusMessage:
             statusMessage != null ? statusMessage() : this.statusMessage,
       );
@@ -358,6 +365,7 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       gridY: preview.gridY,
       widthCells: preview.widthCells,
       heightCells: preview.heightCells,
+      category: state.newBlockCategory,
     );
     state = state.copyWith(
       masks: [...state.masks, mask],
@@ -428,6 +436,7 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
     final mask = MaskDraft.fromCells(
       id: 'block_${_nextBlockNumber++}',
       absoluteCells: cells,
+      category: state.newBlockCategory,
     );
     state = state.copyWith(
       masks: [...state.masks, mask],
@@ -522,6 +531,26 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
 
   void renameMask(int index, String id) =>
       _updateMask(index, state.masks[index].copyWith(id: id));
+
+  /// Category applied to newly drawn/painted masks.
+  void setNewBlockCategory(BlockCategory category) =>
+      state = state.copyWith(newBlockCategory: category);
+
+  void setMaskCategory(int index, BlockCategory category) {
+    // Corner marking only applies to island tiles; reset it otherwise.
+    _updateMask(
+      index,
+      state.masks[index].copyWith(
+        category: category,
+        cornerType: category == BlockCategory.islandTile
+            ? state.masks[index].cornerType
+            : CornerType.none,
+      ),
+    );
+  }
+
+  void setMaskCornerType(int index, CornerType type) =>
+      _updateMask(index, state.masks[index].copyWith(cornerType: type));
 
   void removeMask(int index) {
     final masks = [...state.masks]..removeAt(index);

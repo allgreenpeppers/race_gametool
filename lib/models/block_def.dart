@@ -1,6 +1,34 @@
 import 'geometry.dart';
 import 'port.dart';
 
+/// The kind of asset a block represents. All categories share the same
+/// masking + ports authoring flow and pack into one sprite sheet / bundle.
+enum BlockCategory {
+  track('TRACK'),
+  islandTile('ISLAND_TILE'),
+  startLine('START_LINE');
+
+  const BlockCategory(this.jsonValue);
+  final String jsonValue;
+
+  static BlockCategory fromJson(String? value) => BlockCategory.values
+      .firstWhere((c) => c.jsonValue == value, orElse: () => track);
+}
+
+/// Distinguishes island corner tiles that share the same port count but
+/// differ visually: a convex (outer) corner vs a concave (inner) corner.
+enum CornerType {
+  none('NONE'),
+  convex('CONVEX'),
+  concave('CONCAVE');
+
+  const CornerType(this.jsonValue);
+  final String jsonValue;
+
+  static CornerType fromJson(String? value) => CornerType.values
+      .firstWhere((c) => c.jsonValue == value, orElse: () => none);
+}
+
 /// Size of a block in grid cells. Irregular pieces are treated as a
 /// hollow rectangle covering their full extent.
 class BoundingBox {
@@ -93,6 +121,8 @@ class BlockDef {
     required this.id,
     required this.boundingBox,
     required this.spriteSheetRect,
+    this.category = BlockCategory.track,
+    this.cornerType = CornerType.none,
     this.ports = const [],
     this.autoDecals = const [],
     this.physicsTrackArea = const [],
@@ -105,6 +135,13 @@ class BlockDef {
 
   final BoundingBox boundingBox;
   final SpriteSheetRect spriteSheetRect;
+
+  /// Which asset family this block belongs to.
+  final BlockCategory category;
+
+  /// For island corner tiles, whether it is a convex or concave corner.
+  final CornerType cornerType;
+
   final List<Port> ports;
   final List<AutoDecal> autoDecals;
 
@@ -124,6 +161,8 @@ class BlockDef {
             BoundingBox.fromJson(json['boundingBox'] as Map<String, dynamic>),
         spriteSheetRect: SpriteSheetRect.fromJson(
             json['spriteSheetRect'] as Map<String, dynamic>),
+        category: BlockCategory.fromJson(json['category'] as String?),
+        cornerType: CornerType.fromJson(json['cornerType'] as String?),
         ports: (json['ports'] as List<dynamic>? ?? [])
             .map((p) => Port.fromJson(p as Map<String, dynamic>))
             .toList(),
@@ -147,6 +186,8 @@ class BlockDef {
         'id': id,
         'boundingBox': boundingBox.toJson(),
         'spriteSheetRect': spriteSheetRect.toJson(),
+        'category': category.jsonValue,
+        'cornerType': cornerType.jsonValue,
         'ports': ports.map((p) => p.toJson()).toList(),
         'autoDecals': autoDecals.map((d) => d.toJson()).toList(),
         'physicsTrackArea':
@@ -161,6 +202,8 @@ class BlockDef {
     String? id,
     BoundingBox? boundingBox,
     SpriteSheetRect? spriteSheetRect,
+    BlockCategory? category,
+    CornerType? cornerType,
     List<Port>? ports,
     List<AutoDecal>? autoDecals,
     List<Vec2>? physicsTrackArea,
@@ -171,6 +214,8 @@ class BlockDef {
         id: id ?? this.id,
         boundingBox: boundingBox ?? this.boundingBox,
         spriteSheetRect: spriteSheetRect ?? this.spriteSheetRect,
+        category: category ?? this.category,
+        cornerType: cornerType ?? this.cornerType,
         ports: ports ?? this.ports,
         autoDecals: autoDecals ?? this.autoDecals,
         physicsTrackArea: physicsTrackArea ?? this.physicsTrackArea,

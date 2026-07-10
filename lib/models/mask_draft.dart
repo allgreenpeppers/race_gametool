@@ -1,3 +1,4 @@
+import 'block_def.dart';
 import 'port.dart';
 
 /// A cell coordinate pair. Records compare structurally, so these work
@@ -22,6 +23,8 @@ class MaskDraft {
     required this.heightCells,
     this.cells,
     this.ports = const [],
+    this.category = BlockCategory.track,
+    this.cornerType = CornerType.none,
   });
 
   /// Builds a freeform mask from absolute painted cells. The bounding box
@@ -31,6 +34,8 @@ class MaskDraft {
     required String id,
     required Set<Cell> absoluteCells,
     List<Port> ports = const [],
+    BlockCategory category = BlockCategory.track,
+    CornerType cornerType = CornerType.none,
   }) {
     assert(absoluteCells.isNotEmpty);
     var minX = absoluteCells.first.$1;
@@ -56,6 +61,8 @@ class MaskDraft {
           ? null
           : {for (final (x, y) in absoluteCells) (x - minX, y - minY)},
       ports: ports,
+      category: category,
+      cornerType: cornerType,
     );
   }
 
@@ -76,6 +83,8 @@ class MaskDraft {
       ports: (json['ports'] as List<dynamic>? ?? [])
           .map((p) => Port.fromJson(p as Map<String, dynamic>))
           .toList(),
+      category: BlockCategory.fromJson(json['category'] as String?),
+      cornerType: CornerType.fromJson(json['cornerType'] as String?),
     );
   }
 
@@ -90,6 +99,10 @@ class MaskDraft {
 
   /// Ports in local cell coordinates (0,0 = box top-left cell).
   final List<Port> ports;
+
+  /// Asset family and (for island corners) convex/concave marking.
+  final BlockCategory category;
+  final CornerType cornerType;
 
   bool get isFreeform => cells != null;
 
@@ -108,6 +121,8 @@ class MaskDraft {
                 .map((c) => [c.$1, c.$2])
                 .toList(),
         'ports': ports.map((p) => p.toJson()).toList(),
+        'category': category.jsonValue,
+        'cornerType': cornerType.jsonValue,
       };
 
   /// Whether the absolute cell is part of this mask's actual shape.
@@ -140,6 +155,8 @@ class MaskDraft {
     int? heightCells,
     Set<Cell>? Function()? cells,
     List<Port>? ports,
+    BlockCategory? category,
+    CornerType? cornerType,
   }) =>
       MaskDraft(
         id: id ?? this.id,
@@ -149,5 +166,7 @@ class MaskDraft {
         heightCells: heightCells ?? this.heightCells,
         cells: cells != null ? cells() : this.cells,
         ports: ports ?? this.ports,
+        category: category ?? this.category,
+        cornerType: cornerType ?? this.cornerType,
       );
 }

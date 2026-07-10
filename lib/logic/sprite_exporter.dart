@@ -104,6 +104,8 @@ SpriteExportResult buildSpriteExport({
         w: rect.width,
         h: rect.height,
       ),
+      category: mask.category,
+      cornerType: mask.cornerType,
       ports: mask.ports,
     ));
   }
