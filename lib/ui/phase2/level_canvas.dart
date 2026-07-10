@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -163,6 +165,8 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
           } else {
             notifier.setStatus('Tap a + on a seam to insert a straight');
           }
+        case LevelTool.spawn:
+          notifier.setSpawnAt(x, y);
         case LevelTool.connect:
           // While a straight-extension preview is active, a tap picks how
           // many tiles to place (ghost N -> place N), or cancels.
@@ -240,6 +244,7 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
               marquee: state.marquee,
               groupDelta: state.groupDelta,
               insertMarkers: insertMarkers,
+              spawn: state.spawn,
             ),
           ),
         ),
@@ -262,6 +267,7 @@ class _LevelPainter extends CustomPainter {
     required this.marquee,
     required this.groupDelta,
     required this.insertMarkers,
+    required this.spawn,
   });
 
   final AssetLibrary blocks;
@@ -276,6 +282,7 @@ class _LevelPainter extends CustomPainter {
   final (int, int, int, int)? marquee;
   final (int, int)? groupDelta;
   final List<(int, int)>? insertMarkers;
+  final SpawnPoint? spawn;
 
   static const _cell = GridConstants.cellSize;
 
@@ -292,6 +299,38 @@ class _LevelPainter extends CustomPainter {
     _paintGroupMove(canvas);
     _paintMarquee(canvas);
     _paintInsertMarkers(canvas);
+    _paintSpawn(canvas);
+  }
+
+  void _paintSpawn(Canvas canvas) {
+    final s = spawn;
+    if (s == null) return;
+    final center = Offset((s.gridX + 0.5) * _cell, (s.gridY + 0.5) * _cell);
+    final r = _cell * 0.6;
+    canvas.drawCircle(
+        center, r, Paint()..color = Colors.purpleAccent.withValues(alpha: 0.85));
+    canvas.drawCircle(
+      center,
+      r,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..color = Colors.white,
+    );
+    // Facing arrow.
+    final a = s.facingAngle;
+    final tip = center + Offset(math.cos(a), math.sin(a)) * r;
+    final tail = center - Offset(math.cos(a), math.sin(a)) * r * 0.4;
+    final arrow = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(tail, tip, arrow);
+    for (final side in [2.5, -2.5]) {
+      final wing =
+          tip + Offset(math.cos(a + side), math.sin(a + side)) * r * 0.5;
+      canvas.drawLine(tip, wing, arrow);
+    }
   }
 
   void _paintInsertMarkers(Canvas canvas) {
@@ -569,5 +608,6 @@ class _LevelPainter extends CustomPainter {
       old.selection != selection ||
       old.marquee != marquee ||
       old.groupDelta != groupDelta ||
-      old.insertMarkers != insertMarkers;
+      old.insertMarkers != insertMarkers ||
+      old.spawn != spawn;
 }

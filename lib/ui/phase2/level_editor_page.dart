@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../logic/asset_bundle.dart';
+import '../../models/port.dart';
 import '../../state/app_providers.dart';
 import '../../state/level_editor_providers.dart';
 import '../widgets/block_thumbnail.dart';
@@ -191,59 +192,94 @@ class _Toolbar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Row(
-        children: [
-          SegmentedButton<LevelTool>(
-            showSelectedIcon: false,
-            segments: [
-              for (final tool in LevelTool.values)
-                ButtonSegment(
-                  value: tool,
-                  label: Text(tool.label),
-                  icon: Icon(switch (tool) {
-                    LevelTool.select => Icons.near_me_outlined,
-                    LevelTool.multi => Icons.select_all,
-                    LevelTool.stamp => Icons.add_box_outlined,
-                    LevelTool.connect => Icons.hub_outlined,
-                    LevelTool.insert => Icons.linear_scale,
-                    LevelTool.erase => Icons.delete_outline,
-                  }),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SegmentedButton<LevelTool>(
+                showSelectedIcon: false,
+                segments: [
+                  for (final tool in LevelTool.values)
+                    ButtonSegment(
+                      value: tool,
+                      tooltip: tool.label,
+                      icon: Icon(switch (tool) {
+                        LevelTool.select => Icons.near_me_outlined,
+                        LevelTool.multi => Icons.select_all,
+                        LevelTool.stamp => Icons.add_box_outlined,
+                        LevelTool.connect => Icons.hub_outlined,
+                        LevelTool.insert => Icons.linear_scale,
+                        LevelTool.spawn => Icons.flag_outlined,
+                        LevelTool.erase => Icons.delete_outline,
+                      }),
+                    ),
+                ],
+                selected: {state.tool},
+                onSelectionChanged: (s) => notifier.setTool(s.first),
+              ),
+              Text('${state.placements.length} placed',
+                  style: theme.textTheme.labelMedium),
+              OutlinedButton.icon(
+                onPressed: state.highlighted.length == 1
+                    ? () => notifier
+                        .deleteStraightAndClose(state.highlighted.first)
+                    : null,
+                icon: const Icon(Icons.compress, size: 18),
+                label: const Text('Remove & close'),
+              ),
+              if (state.tool == LevelTool.spawn)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Facing'),
+                    const SizedBox(width: 4),
+                    DropdownButton<PortDirection>(
+                      value: state.spawnFacing,
+                      isDense: true,
+                      items: const [
+                        DropdownMenuItem(
+                            value: PortDirection.up, child: Text('Up')),
+                        DropdownMenuItem(
+                            value: PortDirection.right, child: Text('Right')),
+                        DropdownMenuItem(
+                            value: PortDirection.down, child: Text('Down')),
+                        DropdownMenuItem(
+                            value: PortDirection.left, child: Text('Left')),
+                      ],
+                      onChanged: (d) {
+                        if (d != null) notifier.setSpawnFacing(d);
+                      },
+                    ),
+                  ],
                 ),
+              OutlinedButton.icon(
+                onPressed: state.placements.isEmpty ? null : notifier.clearAll,
+                icon: const Icon(Icons.clear_all, size: 18),
+                label: const Text('Clear'),
+              ),
+              FilledButton.icon(
+                onPressed: notifier.exportMap,
+                icon: const Icon(Icons.save_alt, size: 18),
+                label: const Text('Export map'),
+              ),
             ],
-            selected: {state.tool},
-            onSelectionChanged: (s) => notifier.setTool(s.first),
           ),
-          const SizedBox(width: 16),
-          Text('${state.placements.length} placed',
-              style: theme.textTheme.labelMedium),
-          const SizedBox(width: 16),
-          OutlinedButton.icon(
-            onPressed: state.highlighted.length == 1
-                ? () =>
-                    notifier.deleteStraightAndClose(state.highlighted.first)
-                : null,
-            icon: const Icon(Icons.compress, size: 18),
-            label: const Text('Remove & close'),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+          child: Text(
+            state.statusMessage ?? '',
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodySmall,
           ),
-          const SizedBox(width: 8),
-          OutlinedButton.icon(
-            onPressed:
-                state.placements.isEmpty ? null : notifier.clearAll,
-            icon: const Icon(Icons.clear_all, size: 18),
-            label: const Text('Clear'),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Text(
-              state.statusMessage ?? '',
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodySmall,
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

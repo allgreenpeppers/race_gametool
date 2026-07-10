@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:race_gametool/models/block_def.dart';
+import 'package:race_gametool/models/map_scene.dart';
 import 'package:race_gametool/models/port.dart';
 import 'package:race_gametool/state/app_providers.dart';
 import 'package:race_gametool/state/level_editor_providers.dart';
@@ -103,6 +104,26 @@ void _placementTests() {
     notifier.deleteSelected();
     expect(container.read(levelEditorProvider).placements, isEmpty);
     expect(container.read(levelEditorProvider).selectedPlacementIndex, isNull);
+  });
+
+  test('spawn point and buildScene produce the export model', () {
+    notifier.selectPalette('straight_h');
+    notifier.stampAt(3, 3);
+    notifier.setSpawnFacing(PortDirection.down);
+    notifier.setSpawnAt(5, 6);
+
+    final scene = notifier.buildScene();
+    expect(scene.mapName, 'map_01');
+    expect(scene.spawnPoint.gridX, 5);
+    expect(scene.spawnPoint.gridY, 6);
+    expect(scene.spawnPoint.facingAngle, closeTo(PortDirection.down.angle, 1e-9));
+    expect(scene.placements.length, 1);
+    expect(scene.placements.single.blockId, 'straight_h');
+
+    // Round trips through JSON.
+    final decoded = MapScene.fromJson(scene.toJson());
+    expect(decoded.spawnPoint.gridY, 6);
+    expect(decoded.placements.single.gridX, 3);
   });
 
   test('marquee selects intersecting blocks and group-drag moves them', () {

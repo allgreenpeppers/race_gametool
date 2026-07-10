@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/constants.dart';
@@ -14,6 +18,7 @@ enum LevelTool {
   stamp('Stamp'),
   connect('Connect'),
   insert('Insert'),
+  spawn('Spawn'),
   erase('Erase');
 
   const LevelTool(this.label);
@@ -140,6 +145,8 @@ class LevelEditorState {
     this.selection = const {},
     this.marquee,
     this.groupDelta,
+    this.spawn,
+    this.spawnFacing = PortDirection.right,
     this.statusMessage,
   });
 
@@ -168,6 +175,12 @@ class LevelEditorState {
   /// Live offset applied to the selection during a group drag.
   final (int, int)? groupDelta;
 
+  /// The player start, if placed.
+  final SpawnPoint? spawn;
+
+  /// Facing chosen for the next spawn placement / the current spawn.
+  final PortDirection spawnFacing;
+
   final String? statusMessage;
 
   /// All highlighted placements: the multi-selection plus any single
@@ -186,6 +199,8 @@ class LevelEditorState {
     Set<int>? selection,
     (int, int, int, int)? Function()? marquee,
     (int, int)? Function()? groupDelta,
+    SpawnPoint? Function()? spawn,
+    PortDirection? spawnFacing,
     String? Function()? statusMessage,
   }) =>
       LevelEditorState(
@@ -204,6 +219,8 @@ class LevelEditorState {
         selection: selection ?? this.selection,
         marquee: marquee != null ? marquee() : this.marquee,
         groupDelta: groupDelta != null ? groupDelta() : this.groupDelta,
+        spawn: spawn != null ? spawn() : this.spawn,
+        spawnFacing: spawnFacing ?? this.spawnFacing,
         statusMessage:
             statusMessage != null ? statusMessage() : this.statusMessage,
       );
@@ -981,7 +998,69 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
     );
   }
 
+  // --- Spawn point and export -----------------------------------------------
+
+  void setSpawnFacing(PortDirection dir) {
+    final current = state.spawn;
+    state = state.copyWith(
+      spawnFacing: dir,
+      spawn: current == null
+          ? null
+          : () => SpawnPoint(
+              gridX: current.gridX,
+              gridY: current.gridY,
+              facingAngle: dir.angle),
+    );
+  }
+
+  void setSpawnAt(int gridX, int gridY) {
+    state = state.copyWith(
+      spawn: () => SpawnPoint(
+          gridX: gridX, gridY: gridY, facingAngle: state.spawnFacing.angle),
+      statusMessage: () =>
+          'Spawn at ($gridX, $gridY) facing ${state.spawnFacing.jsonValue}',
+    );
+  }
+
+  void clearSpawn() =>
+      state = state.copyWith(spawn: () => null, statusMessage: () => 'Spawn cleared');
+
   void setMapName(String name) => state = state.copyWith(mapName: name);
+
+  /// Builds the exportable scene from the current editor state. Island
+  /// terrain is empty until the island generator is added.
+  MapScene buildScene() => MapScene(
+        mapName: state.mapName,
+        spawnPoint: state.spawn ??
+            const SpawnPoint(gridX: 0, gridY: 0, facingAngle: 0),
+        placements: state.placements,
+        islandTerrain: const [],
+      );
+
+  /// Exports the scene to a map_NN.json file chosen by the user.
+  Future<void> exportMap() async {
+    if (state.placements.isEmpty) {
+      state = state.copyWith(statusMessage: () => 'Nothing to export');
+      return;
+    }
+    if (state.spawn == null) {
+      state = state.copyWith(
+          statusMessage: () => 'Set a spawn point before exporting');
+      return;
+    }
+    final jsonText =
+        const JsonEncoder.withIndent('  ').convert(buildScene().toJson());
+    final path = await FilePicker.saveFile(
+      dialogTitle: 'Export map scene',
+      fileName: '${state.mapName}.json',
+      type: FileType.custom,
+      allowedExtensions: ['json'],
+      bytes: Uint8List.fromList(utf8.encode(jsonText)),
+    );
+    state = state.copyWith(
+        statusMessage: () =>
+            path == null ? 'Export cancelled' : 'Exported to $path');
+  }
 }
 
 final levelEditorProvider =
