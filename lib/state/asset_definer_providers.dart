@@ -78,6 +78,8 @@ class AssetDefinerState {
     this.paintPreview,
     this.movePreview,
     this.statusMessage,
+    this.isDirty = false,
+    this.currentFilePath,
   });
 
   /// One source image per category (only those that have been loaded).
@@ -103,6 +105,9 @@ class AssetDefinerState {
 
   /// One-shot feedback line shown in the toolbar.
   final String? statusMessage;
+
+  final bool isDirty;
+  final String? currentFilePath;
 
   // --- Active-category views (keep the rest of the editor unchanged) --------
 
@@ -135,6 +140,8 @@ class AssetDefinerState {
     Set<Cell>? Function()? paintPreview,
     MovePreview? Function()? movePreview,
     String? Function()? statusMessage,
+    bool? isDirty,
+    String? Function()? currentFilePath,
   }) {
     final category = activeCategory ?? this.activeCategory;
     var nextMasks = masksByCategory ?? this.masksByCategory;
@@ -154,6 +161,9 @@ class AssetDefinerState {
       movePreview: movePreview != null ? movePreview() : this.movePreview,
       statusMessage:
           statusMessage != null ? statusMessage() : this.statusMessage,
+      isDirty: isDirty ?? this.isDirty,
+      currentFilePath:
+          currentFilePath != null ? currentFilePath() : this.currentFilePath,
     );
   }
 }
@@ -215,6 +225,7 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       dragPreview: () => null,
       paintPreview: () => null,
       movePreview: () => null,
+      isDirty: true,
       statusMessage: () => !hadImage
           ? 'Loaded $name (${image.width} x ${image.height} px)'
           : outOfBounds.isEmpty
@@ -403,6 +414,7 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       masks: [...state.masks, mask],
       selectedIndex: () => state.masks.length,
       dragPreview: () => null,
+      isDirty: true,
       statusMessage: () =>
           'Added ${mask.id} (${mask.widthCells} x ${mask.heightCells} cells)',
     );
@@ -457,6 +469,7 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
     state = state.copyWith(
       masks: masks,
       movePreview: () => null,
+      isDirty: true,
       statusMessage: () =>
           'Moved ${moved.id} to (${moved.gridX}, ${moved.gridY})',
     );
@@ -474,6 +487,7 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       masks: [...state.masks, mask],
       selectedIndex: () => state.masks.length,
       paintPreview: () => null,
+      isDirty: true,
       statusMessage: () => 'Added freeform ${mask.id} '
           '(${cells.length} cells in a ${mask.widthCells} x '
           '${mask.heightCells} box)',
@@ -538,6 +552,7 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
           masks: masks,
           selectedIndex: () => maskIndex,
           dragPreview: () => null,
+          isDirty: true,
           statusMessage: () => 'Added ${port.bidirectional ? "pass-through " : ""}'
               'port ${port.direction.jsonValue} (span ${port.span}) '
               'on ${mask.id}',
@@ -582,7 +597,7 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
 
   void removeMask(int index) {
     final masks = [...state.masks]..removeAt(index);
-    state = state.copyWith(masks: masks, selectedIndex: () => null);
+    state = state.copyWith(masks: masks, selectedIndex: () => null, isDirty: true);
   }
 
   void updatePort(int maskIndex, int portIndex, Port port) {
@@ -606,19 +621,29 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
   void _updateMask(int index, MaskDraft mask) {
     final masks = [...state.masks];
     masks[index] = mask;
-    state = state.copyWith(masks: masks);
+    state = state.copyWith(masks: masks, isDirty: true);
   }
 
   // --- Bundle save / open ---------------------------------------------------
 
-  /// Writes the single-source-of-truth .rgpack: raw draft image, editor
-  /// state (masks and ports), and the derived packed sheet plus sprite
-  /// dictionary. Also hands the freshly packed assets to the shared
-  /// library so Phase 2 sees them without a reload.
-  ///
-  /// With the multi-category image architecture, each category's masks are
-  /// exported using that category's own source image.
-  Future<void> saveBundle() async {
+  void newConfig() {
+    _nextBlockNumber = 1;
+    _dragAnchor = null;
+    _lastPaintCell = null;
+    state = const AssetDefinerState();
+    // Also clear the shared library so the level editor doesn't have stale assets
+    ref.read(assetLibraryProvider.notifier).clear();
+  }
+
+  Future<void> save() async {
+    if (state.currentFilePath != null) {
+      await saveToPath(state.currentFilePath!);
+    } else {
+      await saveAs();
+    }
+  }
+
+  Future<void> saveAs() async {
     if (!state.canExport) return;
 
     final duplicateIds = _findDuplicateIds();
@@ -652,7 +677,6 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
     }
 
     final suggestedName = _bundleFileNameFor(state.imageName);
-    // On macOS file_picker writes the provided bytes to the chosen path.
     final path = await FilePicker.saveFile(
       dialogTitle: 'Save asset bundle',
       fileName: suggestedName,
@@ -678,6 +702,69 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
     }
 
     state = state.copyWith(
+      isDirty: false,
+      currentFilePath: () => path,
+      statusMessage: () =>
+          'Saved ${state.allMasks.length} blocks to $path (available in Phase 2)',
+    );
+  }
+
+  Future<void> saveToPath(String path) async {
+    if (!state.canExport) return;
+
+    final duplicateIds = _findDuplicateIds();
+    if (duplicateIds.isNotEmpty) {
+      state = state.copyWith(
+          statusMessage: () =>
+              'Save blocked: duplicate block IDs ${duplicateIds.join(', ')}');
+      return;
+    }
+
+    // Collect per-category raw images for the multi-source export.
+    final categoryImages = <BlockCategory, Uint8List>{};
+    for (final c in BlockCategory.values) {
+      final catImage = state.images[c];
+      final catMasks = state.masksByCategory[c];
+      if (catImage != null && catMasks != null && catMasks.isNotEmpty) {
+        categoryImages[c] = catImage.bytes;
+      }
+    }
+
+    final Uint8List bundleBytes;
+    try {
+      bundleBytes = writeAssetBundle(
+        categoryImages: categoryImages,
+        imageName: state.imageName ?? 'draft.png',
+        masks: state.allMasks,
+      );
+    } on Object catch (e) {
+      state = state.copyWith(statusMessage: () => 'Save failed: $e');
+      return;
+    }
+
+    try {
+      final file = File(path);
+      await file.writeAsBytes(bundleBytes);
+    } catch (e) {
+      state = state.copyWith(statusMessage: () => 'Save to disk failed: $e');
+      return;
+    }
+
+    // Populate the shared library from the same bundle we just wrote.
+    try {
+      final data = readAssetBundle(bundleBytes);
+      await ref.read(assetLibraryProvider.notifier).loadAssets(
+            blocks: data.blocks,
+            sheetBytes: data.sheetBytes,
+            sourceName: path.split('/').last,
+          );
+    } on Object {
+      // Non-fatal: the file is saved regardless of the in-memory hand-off.
+    }
+
+    state = state.copyWith(
+      isDirty: false,
+      currentFilePath: () => path,
       statusMessage: () =>
           'Saved ${state.allMasks.length} blocks to $path (available in Phase 2)',
     );
@@ -692,8 +779,9 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       withData: true,
     );
     final bytes = result?.files.single.bytes;
+    final path = result?.files.single.path;
     if (bytes == null) return;
-    await _loadBundleBytes(bytes, sourceName: result!.files.single.name);
+    await _loadBundleBytes(bytes, sourceName: result!.files.single.name, filePath: path);
   }
 
   /// Opens a .rgpack given a filesystem path, used when the OS launches or
@@ -707,12 +795,13 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       return;
     }
     final bytes = await file.readAsBytes();
-    await _loadBundleBytes(bytes, sourceName: path.split('/').last);
+    await _loadBundleBytes(bytes, sourceName: path.split('/').last, filePath: path);
   }
 
   Future<void> _loadBundleBytes(
     Uint8List bytes, {
     required String sourceName,
+    String? filePath,
   }) async {
     final AssetBundleData data;
     try {
@@ -761,9 +850,11 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
     state = AssetDefinerState(
       images: images,
       masksByCategory: groupedMasks,
-      activeCategory: groupedMasks.keys.first,
+      activeCategory: groupedMasks.keys.isNotEmpty ? groupedMasks.keys.first : BlockCategory.track,
       tool: Phase1Tool.select,
       statusMessage: 'Opened $sourceName (${data.masks.length} blocks)',
+      isDirty: false,
+      currentFilePath: filePath,
     );
     // Keep the highest existing block_N counter so new boxes do not collide.
     _nextBlockNumber = _highestBlockNumber(data.masks) + 1;

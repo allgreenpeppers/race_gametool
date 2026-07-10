@@ -1,6 +1,9 @@
 #include "my_application.h"
 
 #include <flutter_linux/flutter_linux.h>
+#include <limits.h>
+#include <string.h>
+#include <unistd.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
 #endif
@@ -25,6 +28,20 @@ static void my_application_activate(GApplication* application) {
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 
+  // Set window icon.
+  char exe_path[PATH_MAX];
+  ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+  if (len != -1) {
+    exe_path[len] = '\0';
+    char* last_slash = strrchr(exe_path, '/');
+    if (last_slash != nullptr) {
+      *last_slash = '\0';
+      char icon_path[PATH_MAX + 100];
+      snprintf(icon_path, sizeof(icon_path), "%s/data/flutter_assets/assets/icons/icon1024.png", exe_path);
+      gtk_window_set_icon_from_file(window, icon_path, nullptr);
+    }
+  }
+
   // Use a header bar when running in GNOME as this is the common style used
   // by applications and is the setup most users will be using (e.g. Ubuntu
   // desktop).
@@ -45,11 +62,11 @@ static void my_application_activate(GApplication* application) {
   if (use_header_bar) {
     GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
     gtk_widget_show(GTK_WIDGET(header_bar));
-    gtk_header_bar_set_title(header_bar, "race_gametool");
+    gtk_header_bar_set_title(header_bar, "Race Game Tool");
     gtk_header_bar_set_show_close_button(header_bar, TRUE);
     gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
   } else {
-    gtk_window_set_title(window, "race_gametool");
+    gtk_window_set_title(window, "Race Game Tool");
   }
 
   gtk_window_set_default_size(window, 1280, 720);

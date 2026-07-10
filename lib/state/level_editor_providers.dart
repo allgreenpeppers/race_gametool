@@ -1,6 +1,6 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -177,6 +177,8 @@ class LevelEditorState {
     this.islandGrassMask,
     this.undoStack = const [],
     this.islandBrushRadius = 0,
+    this.isDirty = false,
+    this.currentFilePath,
   });
 
   final String mapName;
@@ -225,6 +227,9 @@ class LevelEditorState {
   /// Radius of the island paint/erase brush in cells (0 = 1x1, 1 = 3x3, etc.)
   final int islandBrushRadius;
 
+  final bool isDirty;
+  final String? currentFilePath;
+
   /// All highlighted placements: the multi-selection plus any single
   /// selection from the other tools.
   Set<int> get highlighted =>
@@ -248,6 +253,8 @@ class LevelEditorState {
     Set<(int, int)>? Function()? islandGrassMask,
     List<(List<BlockPlacement>, SpawnPoint?, Set<(int, int)>?)>? undoStack,
     int? islandBrushRadius,
+    bool? isDirty,
+    String? Function()? currentFilePath,
   }) =>
       LevelEditorState(
         mapName: mapName ?? this.mapName,
@@ -275,6 +282,9 @@ class LevelEditorState {
             : this.islandGrassMask,
         undoStack: undoStack ?? this.undoStack,
         islandBrushRadius: islandBrushRadius ?? this.islandBrushRadius,
+        isDirty: isDirty ?? this.isDirty,
+        currentFilePath:
+            currentFilePath != null ? currentFilePath() : this.currentFilePath,
       );
 }
 
@@ -293,7 +303,7 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
     if (newStack.length > 50) {
       newStack.removeAt(0);
     }
-    state = state.copyWith(undoStack: newStack);
+    state = state.copyWith(undoStack: newStack, isDirty: true);
   }
 
   void undo() {
@@ -312,6 +322,7 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
       selectedPlacementIndex: () => null,
       selection: const {},
       extendPreview: () => null,
+      isDirty: true,
       statusMessage: () => 'Undo successful',
     );
   }
@@ -836,13 +847,31 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
     );
   }
 
+  void clearLayer(MapLayer layer) {
+    _saveToHistory();
+    final kept = <BlockPlacement>[];
+    for (final p in state.placements) {
+      if (layerOf(p) != layer) {
+        kept.add(p);
+      }
+    }
+    // If clearing island layer, also clear islandGrassMask
+    final nextMask = (layer == MapLayer.island) ? null : state.islandGrassMask;
+    state = state.copyWith(
+      placements: kept,
+      selectedPlacementIndex: () => null,
+      selection: const {},
+      islandGrassMask: () => nextMask,
+      statusMessage: () => 'Cleared ${layer.label} layer',
+    );
+  }
+
   void clearAll() {
     _saveToHistory();
     state = state.copyWith(
       placements: const [],
       selectedPlacementIndex: () => null,
       selection: const {},
-      // Also clear the painted grass region so the overlay does not linger.
       islandGrassMask: () => null,
       statusMessage: () => 'Cleared all placements',
     );
@@ -1252,11 +1281,6 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
     _autotileGrassMask(mask);
   }
 
-  void resetIslandMask() {
-    _saveToHistory();
-    state = state.copyWith(islandGrassMask: () => null);
-    generateIsland();
-  }
 
   void setIslandBrushRadius(int radius) {
     state = state.copyWith(islandBrushRadius: radius);
@@ -1440,30 +1464,126 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
         islandTerrain: const [],
       );
 
-  /// Exports the scene to a map_NN.json file chosen by the user.
-  Future<void> exportMap() async {
+  Future<void> openGameLevel(String path) async {
+    final file = File(path);
+    if (!file.existsSync()) {
+      state = state.copyWith(statusMessage: () => 'File not found: $path');
+      return;
+    }
+    final content = await file.readAsString();
+    final jsonMap = json.decode(content) as Map<String, dynamic>;
+    final scene = MapScene.fromJson(jsonMap);
+
+    state = state.copyWith(
+      mapName: scene.mapName,
+      placements: scene.placements,
+      spawn: () => scene.spawnPoint,
+      undoStack: const [],
+      selectedPlacementIndex: () => null,
+      selection: const {},
+      isDirty: false,
+      currentFilePath: () => path,
+      statusMessage: () => 'Loaded level from $path',
+    );
+
+    // Reconstruct the grassMask by filtering for island tile placements
+    final grassMask = state.placements
+        .where((p) => _def(p.blockId)?.category == BlockCategory.islandTile)
+        .map((p) => (p.gridX, p.gridY))
+        .toSet();
+
+    state = state.copyWith(
+      islandGrassMask: () => grassMask.isEmpty ? null : grassMask,
+    );
+  }
+
+  Future<void> openGameLevelDialog() async {
+    final result = await FilePicker.pickFiles(
+      dialogTitle: 'Open game level',
+      type: FileType.custom,
+      allowedExtensions: ['json'],
+    );
+    final path = result?.files.single.path;
+    if (path == null) return;
+    await openGameLevel(path);
+  }
+
+  void newGameMap() {
+    state = state.copyWith(
+      mapName: 'map_01',
+      placements: const [],
+      spawn: () => null,
+      undoStack: const [],
+      selectedPlacementIndex: () => null,
+      selection: const {},
+      islandGrassMask: () => null,
+      isDirty: false,
+      currentFilePath: () => null,
+      statusMessage: () => 'Created new game map',
+    );
+  }
+
+  Future<void> save() async {
+    if (state.currentFilePath != null) {
+      await saveToPath(state.currentFilePath!);
+    } else {
+      await saveAs();
+    }
+  }
+
+  Future<void> saveAs() async {
     if (state.placements.isEmpty) {
-      state = state.copyWith(statusMessage: () => 'Nothing to export');
+      state = state.copyWith(statusMessage: () => 'Nothing to save');
       return;
     }
     if (state.spawn == null) {
       state = state.copyWith(
-          statusMessage: () => 'Set a spawn point before exporting');
+          statusMessage: () => 'Set a spawn point before saving');
+      return;
+    }
+    final suggestedName = '${state.mapName}.json';
+    final path = await FilePicker.saveFile(
+      dialogTitle: 'Save game level',
+      fileName: suggestedName,
+      type: FileType.custom,
+      allowedExtensions: ['json'],
+    );
+    if (path == null) {
+      state = state.copyWith(statusMessage: () => 'Save cancelled');
+      return;
+    }
+    await saveToPath(path);
+  }
+
+  Future<void> saveToPath(String path) async {
+    if (state.placements.isEmpty) {
+      state = state.copyWith(statusMessage: () => 'Nothing to save');
+      return;
+    }
+    if (state.spawn == null) {
+      state = state.copyWith(
+          statusMessage: () => 'Set a spawn point before saving');
       return;
     }
     final jsonText =
         const JsonEncoder.withIndent('  ').convert(buildScene().toJson());
-    final path = await FilePicker.saveFile(
-      dialogTitle: 'Export map scene',
-      fileName: '${state.mapName}.json',
-      type: FileType.custom,
-      allowedExtensions: ['json'],
-      bytes: Uint8List.fromList(utf8.encode(jsonText)),
-    );
+    try {
+      final file = File(path);
+      await file.writeAsString(jsonText);
+    } catch (e) {
+      state = state.copyWith(statusMessage: () => 'Save failed: $e');
+      return;
+    }
+
     state = state.copyWith(
-        statusMessage: () =>
-            path == null ? 'Export cancelled' : 'Exported to $path');
+      isDirty: false,
+      currentFilePath: () => path,
+      statusMessage: () => 'Saved map to $path',
+    );
   }
+
+  /// Exports the scene to a map_NN.json file chosen by the user (kept for convenience/compatibility).
+  Future<void> exportMap() => saveAs();
 }
 
 final levelEditorProvider =
