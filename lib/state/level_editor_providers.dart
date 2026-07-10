@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/constants.dart';
+import '../logic/track_topology.dart';
 import '../models/block_def.dart';
 import '../models/map_scene.dart';
 import '../models/port.dart';
@@ -12,6 +13,7 @@ enum LevelTool {
   multi('Multi'),
   stamp('Stamp'),
   connect('Connect'),
+  insert('Insert'),
   erase('Erase');
 
   const LevelTool(this.label);
@@ -71,6 +73,18 @@ List<(int, int)> portOutwardCells(
     for (var k = 0; k < ew * eh; k++)
       (sx + (ew > 1 ? k : 0) + dx, sy + (eh > 1 ? k : 0) + dy),
   ];
+}
+
+/// The cells a port's strip itself occupies, given the block's placed
+/// origin in grid cells.
+Set<(int, int)> portStripCells(int originX, int originY, Port port) {
+  final (ew, eh) = port.cellExtent;
+  final sx = originX + port.localGridX;
+  final sy = originY + port.localGridY;
+  return {
+    for (var k = 0; k < ew * eh; k++)
+      (sx + (ew > 1 ? k : 0), sy + (eh > 1 ? k : 0)),
+  };
 }
 
 /// A block that can snap onto a given source port: which block, via which
@@ -756,6 +770,214 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
     state = state.copyWith(
       placements: placements,
       statusMessage: () => 'Moved ${sel.length} blocks',
+    );
+  }
+
+  // --- Insert / delete straight at a seam (auto-shift downstream) -----------
+
+  List<Seam> _seams() => findSeams(state.placements, _def);
+
+  /// A direction is "forward" if it points right or down; inserting/removing
+  /// keeps the near (up/left) side fixed and shifts the far side.
+  static bool _isForward(PortDirection d) {
+    final (dx, dy) = d.gridDelta;
+    return dy > 0 || (dy == 0 && dx > 0);
+  }
+
+  /// Seams eligible for an insert marker: one per boundary (the forward
+  /// direction), whose near side has a same-span straight to insert.
+  List<Seam> insertSeams() =>
+      _seams().where((s) => _isForward(s.dir)).toList();
+
+  /// Pixel-centre of each insert seam's boundary, for drawing "+" markers.
+  List<(int, int)> insertSeamBoundaryCells() {
+    final cells = <(int, int)>[];
+    for (final s in insertSeams()) {
+      final near = state.placements[s.nearIndex];
+      final def = _def(near.blockId);
+      if (def == null) continue;
+      final outward = portOutwardCells(
+          near.gridX, near.gridY, def.ports[s.nearPortIndex], s.dir);
+      cells.add(outward[outward.length ~/ 2]);
+    }
+    return cells;
+  }
+
+  /// The forward seam whose boundary contains the tapped cell, if any.
+  Seam? insertSeamAt(int cellX, int cellY) {
+    for (final s in insertSeams()) {
+      final near = state.placements[s.nearIndex];
+      final def = _def(near.blockId);
+      if (def == null) continue;
+      final outward = portOutwardCells(
+          near.gridX, near.gridY, def.ports[s.nearPortIndex], s.dir);
+      if (outward.contains((cellX, cellY))) return s;
+    }
+    return null;
+  }
+
+  /// First library block that can bridge a gap along [dir] with the given
+  /// [span]: it needs a port facing back (dir.opposite) and one facing on
+  /// (dir), both of matching span. Returns the block and its near-port index.
+  (BlockDef, int)? _straightConnector(PortDirection dir, int span) {
+    for (final def in _blocks) {
+      final nearIdx = def.ports.indexWhere((p) =>
+          p.span == span &&
+          portOutwardDirections(def, p).contains(dir.opposite));
+      if (nearIdx == -1) continue;
+      final hasFar = def.ports.any((p) =>
+          p.span == span && portOutwardDirections(def, p).contains(dir));
+      if (!hasFar) continue;
+      return (def, nearIdx);
+    }
+    return null;
+  }
+
+  String? _validateLayout(List<BlockPlacement> list) {
+    final rects = <CellRect>[];
+    for (final p in list) {
+      final def = _def(p.blockId);
+      if (def == null) continue;
+      if (p.gridX < 0 ||
+          p.gridY < 0 ||
+          p.gridX + def.boundingBox.width > GridConstants.levelGridCols ||
+          p.gridY + def.boundingBox.height > GridConstants.levelGridRows) {
+        return 'Shift would leave the grid';
+      }
+      rects.add(CellRect(
+          p.gridX, p.gridY, def.boundingBox.width, def.boundingBox.height));
+    }
+    for (var a = 0; a < rects.length; a++) {
+      for (var b = a + 1; b < rects.length; b++) {
+        if (rects[a].overlaps(rects[b])) return 'Shift would overlap blocks';
+      }
+    }
+    return null;
+  }
+
+  /// Inserts a straight at [seam], pushing the far-side connected component
+  /// outward by one tile-length and dropping the straight into the gap.
+  void insertStraightAtSeam(Seam seam) {
+    final placements = state.placements;
+    final adj = buildAdjacency(placements.length, _seams());
+    final far = reachable(adj, seam.farIndex,
+        edgeA: seam.nearIndex, edgeB: seam.farIndex);
+    if (far.contains(seam.nearIndex)) {
+      state = state.copyWith(
+          statusMessage: () => 'Cannot insert into a closed loop');
+      return;
+    }
+    final conn = _straightConnector(seam.dir, seam.span);
+    if (conn == null) {
+      state = state.copyWith(
+          statusMessage: () =>
+              'No straight tile of span ${seam.span} to insert');
+      return;
+    }
+    final (sdef, straightNearPort) = conn;
+    final (dx, dy) = seam.dir.gridDelta;
+    final length =
+        dx != 0 ? sdef.boundingBox.width : sdef.boundingBox.height;
+
+    final near = state.placements[seam.nearIndex];
+    final ndef = _def(near.blockId)!;
+    final outward = portOutwardCells(
+        near.gridX, near.gridY, ndef.ports[seam.nearPortIndex], seam.dir);
+    final (ox, oy) = outward.first; // min corner of the gap
+    final straightX = ox - sdef.ports[straightNearPort].localGridX;
+    final straightY = oy - sdef.ports[straightNearPort].localGridY;
+
+    final newList = <BlockPlacement>[
+      for (var i = 0; i < placements.length; i++)
+        if (far.contains(i))
+          placements[i].copyWith(
+              gridX: placements[i].gridX + dx * length,
+              gridY: placements[i].gridY + dy * length)
+        else
+          placements[i],
+      BlockPlacement(blockId: sdef.id, gridX: straightX, gridY: straightY),
+    ];
+
+    final err = _validateLayout(newList);
+    if (err != null) {
+      state = state.copyWith(statusMessage: () => err);
+      return;
+    }
+    state = state.copyWith(
+      placements: newList,
+      selectedPlacementIndex: () => newList.length - 1,
+      selection: const {},
+      statusMessage: () => 'Inserted ${sdef.id} at the seam',
+    );
+  }
+
+  /// Deletes the block at [index]; if it is a straight connected on two
+  /// opposite sides, the far-side component slides back to close the gap.
+  void deleteStraightAndClose(int index) {
+    final def = _def(state.placements[index].blockId);
+    if (def == null) {
+      _removeAt(index);
+      return;
+    }
+    final allSeams = _seams();
+    Seam? forward;
+    for (final s in allSeams) {
+      if (s.nearIndex == index && _isForward(s.dir)) {
+        forward = s;
+        break;
+      }
+    }
+    Seam? back;
+    if (forward != null) {
+      for (final s in allSeams) {
+        if (s.nearIndex == index && s.dir == forward.dir.opposite) {
+          back = s;
+          break;
+        }
+      }
+    }
+    // Not a through-straight (dangling or unconnected): plain remove.
+    if (forward == null || back == null) {
+      _removeAt(index);
+      return;
+    }
+
+    final (dx, dy) = forward.dir.gridDelta;
+    final length = dx != 0 ? def.boundingBox.width : def.boundingBox.height;
+    final adjNoIndex = buildAdjacency(
+        state.placements.length,
+        allSeams
+            .where((s) => s.nearIndex != index && s.farIndex != index)
+            .toList());
+    final far = reachable(adjNoIndex, forward.farIndex);
+    if (far.contains(back.farIndex)) {
+      // Removing would leave a loop; cannot close cleanly, just remove.
+      _removeAt(index);
+      state = state.copyWith(
+          statusMessage: () => 'Removed straight (loop: gap left open)');
+      return;
+    }
+
+    final newList = <BlockPlacement>[
+      for (var i = 0; i < state.placements.length; i++)
+        if (i != index)
+          if (far.contains(i))
+            state.placements[i].copyWith(
+                gridX: state.placements[i].gridX - dx * length,
+                gridY: state.placements[i].gridY - dy * length)
+          else
+            state.placements[i],
+    ];
+    final err = _validateLayout(newList);
+    if (err != null) {
+      state = state.copyWith(statusMessage: () => err);
+      return;
+    }
+    state = state.copyWith(
+      placements: newList,
+      selectedPlacementIndex: () => null,
+      selection: const {},
+      statusMessage: () => 'Removed straight and closed the gap',
     );
   }
 

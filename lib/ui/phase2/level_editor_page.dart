@@ -207,6 +207,7 @@ class _Toolbar extends StatelessWidget {
                     LevelTool.multi => Icons.select_all,
                     LevelTool.stamp => Icons.add_box_outlined,
                     LevelTool.connect => Icons.hub_outlined,
+                    LevelTool.insert => Icons.linear_scale,
                     LevelTool.erase => Icons.delete_outline,
                   }),
                 ),
@@ -218,6 +219,15 @@ class _Toolbar extends StatelessWidget {
           Text('${state.placements.length} placed',
               style: theme.textTheme.labelMedium),
           const SizedBox(width: 16),
+          OutlinedButton.icon(
+            onPressed: state.highlighted.length == 1
+                ? () =>
+                    notifier.deleteStraightAndClose(state.highlighted.first)
+                : null,
+            icon: const Icon(Icons.compress, size: 18),
+            label: const Text('Remove & close'),
+          ),
+          const SizedBox(width: 8),
           OutlinedButton.icon(
             onPressed:
                 state.placements.isEmpty ? null : notifier.clearAll,

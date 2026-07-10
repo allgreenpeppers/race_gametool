@@ -140,6 +140,11 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
     final occupied =
         state.tool == LevelTool.connect ? notifier.occupiedCells() : null;
 
+    // Seam markers for the Insert tool.
+    final insertMarkers = state.tool == LevelTool.insert
+        ? notifier.insertSeamBoundaryCells()
+        : null;
+
     void handleTap(Offset local, Offset global) {
       final (x, y) = _toCell(local);
       switch (state.tool) {
@@ -151,6 +156,13 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
           notifier.selectAt(x, y);
         case LevelTool.multi:
           notifier.selectSingleAt(x, y);
+        case LevelTool.insert:
+          final seam = notifier.insertSeamAt(x, y);
+          if (seam != null) {
+            notifier.insertStraightAtSeam(seam);
+          } else {
+            notifier.setStatus('Tap a + on a seam to insert a straight');
+          }
         case LevelTool.connect:
           // While a straight-extension preview is active, a tap picks how
           // many tiles to place (ghost N -> place N), or cancels.
@@ -227,6 +239,7 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
               selection: state.highlighted,
               marquee: state.marquee,
               groupDelta: state.groupDelta,
+              insertMarkers: insertMarkers,
             ),
           ),
         ),
@@ -248,6 +261,7 @@ class _LevelPainter extends CustomPainter {
     required this.selection,
     required this.marquee,
     required this.groupDelta,
+    required this.insertMarkers,
   });
 
   final AssetLibrary blocks;
@@ -261,6 +275,7 @@ class _LevelPainter extends CustomPainter {
   final Set<int> selection;
   final (int, int, int, int)? marquee;
   final (int, int)? groupDelta;
+  final List<(int, int)>? insertMarkers;
 
   static const _cell = GridConstants.cellSize;
 
@@ -276,6 +291,16 @@ class _LevelPainter extends CustomPainter {
     _paintExtendPreview(canvas);
     _paintGroupMove(canvas);
     _paintMarquee(canvas);
+    _paintInsertMarkers(canvas);
+  }
+
+  void _paintInsertMarkers(Canvas canvas) {
+    final markers = insertMarkers;
+    if (markers == null) return;
+    for (final (cx, cy) in markers) {
+      _paintPlus(canvas, Offset((cx + 0.5) * _cell, (cy + 0.5) * _cell),
+          _cell * 0.45);
+    }
   }
 
   void _paintGroupMove(Canvas canvas) {
@@ -543,5 +568,6 @@ class _LevelPainter extends CustomPainter {
       old.extendPreview != extendPreview ||
       old.selection != selection ||
       old.marquee != marquee ||
-      old.groupDelta != groupDelta;
+      old.groupDelta != groupDelta ||
+      old.insertMarkers != insertMarkers;
 }
