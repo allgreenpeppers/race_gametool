@@ -336,7 +336,7 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
 
   void setLayer(MapLayer layer) {
     LevelTool nextTool = state.tool;
-    if (layer == MapLayer.island) {
+    if (layer == MapLayer.island || layer == MapLayer.decoration) {
       if (nextTool == LevelTool.connect ||
           nextTool == LevelTool.insert ||
           nextTool == LevelTool.spawn) {

@@ -9,15 +9,16 @@ A new Flutter project.
   - [X] Decoration layer (finish line and other decoration)
   - [X] Track layer
   - [X] Island layer
-- [ ] 2 Line align to cursor: vertical/horizontal
-- [ ] Auto island generation.
+- [X] 2 Line align to cursor: vertical/horizontal
+- [X] Auto island generation.
   - [X] Mark island tiles with 8-direction ports (interior has all 4 diagonals; a concave corner has no diagonal pointing into the notch).
   - [X] In the island Phase 1 page, tally tiles by kind and report set completeness.
   - [X] Basic generator: enabled once the full convex set is present (interior + 4 edges + 4 convex corners).
   - [X] Advanced generator (islands with concave notches): concave corners are placed automatically when authored.
   - [X] When a kind has more than one tile, pick one at random.
   - [X] Auto: grow the island from the track footprint (+4 cells, smoothed) and autotile by each cell's 8-neighbour grass mask.
-  - [ ] Manual grass brush to paint/erase the 1/0 island region before autotiling.
-- [ ] Undo
-- [ ] Confirm before clear all
-- [ ] Use window manager to create a desktop app with a custom window frame.
+  - [X] Manual grass brush to paint/erase the 1/0 island region before autotiling.
+- [X] Undo
+- [X] Confirm before clear all
+- [X] Use window manager to create a desktop app with a custom window frame.
+- [ ] Import.

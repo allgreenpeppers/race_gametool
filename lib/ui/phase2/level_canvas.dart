@@ -153,6 +153,7 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
         : null;
 
     void handleTap(Offset local, Offset global) {
+      Focus.of(context).requestFocus();
       final (x, y) = _toCell(local);
       switch (state.tool) {
         case LevelTool.stamp:
@@ -244,6 +245,7 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
           onPanStart: !usesDrag
               ? null
               : (d) {
+                  Focus.of(context).requestFocus();
                   final (x, y) = _toCell(d.localPosition);
                   if (state.tool == LevelTool.multi) {
                     notifier.multiDragStart(x, y);

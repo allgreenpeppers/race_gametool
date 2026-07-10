@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -69,7 +70,20 @@ class _AppShellState extends ConsumerState<AppShell> {
     final levelState = ref.watch(levelEditorProvider);
     final levelNotifier = ref.read(levelEditorProvider.notifier);
 
-    return Scaffold(
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyZ, control: true): () {
+          if (mode == AppMode.levelEditor) {
+            levelNotifier.undo();
+          }
+        },
+        const SingleActivator(LogicalKeyboardKey.keyZ, meta: true): () {
+          if (mode == AppMode.levelEditor) {
+            levelNotifier.undo();
+          }
+        },
+      },
+      child: Scaffold(
       body: Column(
         children: [
           // Unified Top Toolbar and Window Control Row (Split into 2 Lines)
@@ -181,8 +195,12 @@ class _AppShellState extends ConsumerState<AppShell> {
                             ),
                             segments: [
                               for (final t in Phase1Tool.values)
-                                if (assetState.activeCategory != BlockCategory.islandTile ||
-                                    (t != Phase1Tool.paintMask && t != Phase1Tool.addPort))
+                                if ((assetState.activeCategory == BlockCategory.track) ||
+                                    (assetState.activeCategory == BlockCategory.islandTile &&
+                                        t != Phase1Tool.paintMask &&
+                                        t != Phase1Tool.addPort) ||
+                                    (assetState.activeCategory == BlockCategory.decoration &&
+                                        t != Phase1Tool.addPort))
                                   ButtonSegment(
                                     value: t,
                                     tooltip: t.label,
@@ -237,7 +255,8 @@ class _AppShellState extends ConsumerState<AppShell> {
                             ),
                             segments: [
                               for (final tool in LevelTool.values)
-                                if (levelState.activeLayer != MapLayer.island ||
+                                if ((levelState.activeLayer != MapLayer.island &&
+                                        levelState.activeLayer != MapLayer.decoration) ||
                                     (tool != LevelTool.connect &&
                                         tool != LevelTool.insert &&
                                         tool != LevelTool.spawn))
@@ -440,6 +459,7 @@ class _AppShellState extends ConsumerState<AppShell> {
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 }
