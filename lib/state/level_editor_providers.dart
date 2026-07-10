@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
@@ -278,6 +279,8 @@ class LevelEditorState {
 }
 
 class LevelEditorNotifier extends Notifier<LevelEditorState> {
+  final Random _random = Random();
+
   @override
   LevelEditorState build() => const LevelEditorState();
 
@@ -839,6 +842,8 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
       placements: const [],
       selectedPlacementIndex: () => null,
       selection: const {},
+      // Also clear the painted grass region so the overlay does not linger.
+      islandGrassMask: () => null,
       statusMessage: () => 'Cleared all placements',
     );
   }
@@ -1260,7 +1265,7 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
   void paintGrassAt(int cx, int cy, {required bool erase}) {
     final mask = {..._ensureGrassMask()};
     final radius = state.islandBrushRadius;
-    var changed = false;
+    final changedCells = <(int, int)>{};
     for (var dy = -radius; dy <= radius; dy++) {
       for (var dx = -radius; dx <= radius; dx++) {
         final x = cx + dx;
@@ -1270,16 +1275,81 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
             y >= 0 &&
             y < GridConstants.levelGridRows) {
           if (erase) {
-            if (mask.remove((x, y))) changed = true;
+            if (mask.remove((x, y))) changedCells.add((x, y));
           } else {
-            if (mask.add((x, y))) changed = true;
+            if (mask.add((x, y))) changedCells.add((x, y));
           }
         }
       }
     }
-    if (!changed) return;
+    if (changedCells.isEmpty) return;
+    // Incremental: only retile the changed cells and their 8-neighbours,
+    // keeping every other island tile (and its random pick) intact. Avoids
+    // re-randomising the whole island on every brush move.
+    _retileGrassCells(mask, changedCells);
+  }
+
+  /// Re-tiles just [changed] plus their 8-neighbours against [mask],
+  /// preserving all other island placements. A cell whose signature is
+  /// unchanged keeps its existing tile (no re-random).
+  void _retileGrassCells(Set<(int, int)> mask, Set<(int, int)> changed) {
+    final tiles = _islandTilesBySignature();
+    final affected = <(int, int)>{};
+    for (final (x, y) in changed) {
+      for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+          affected.add((x + dx, y + dy));
+        }
+      }
+    }
+
+    final islandByCell = <(int, int), BlockPlacement>{};
+    final others = <BlockPlacement>[];
+    for (final p in state.placements) {
+      if (layerOf(p) == MapLayer.island) {
+        islandByCell[(p.gridX, p.gridY)] = p;
+      } else {
+        others.add(p);
+      }
+    }
+
+    for (final cell in affected) {
+      final (x, y) = cell;
+      if (x < 0 ||
+          y < 0 ||
+          x >= GridConstants.levelGridCols ||
+          y >= GridConstants.levelGridRows) {
+        continue;
+      }
+      if (!mask.contains(cell)) {
+        islandByCell.remove(cell);
+        continue;
+      }
+      final key = sigKey(cellSignatureFromSet(mask, x, y));
+      // Keep the existing tile if it still fits this signature.
+      final existing = islandByCell[cell];
+      if (existing != null) {
+        final exDef = _def(existing.blockId);
+        if (exDef != null &&
+            sigKey(exDef.ports.map((p) => p.direction).toSet()) == key) {
+          continue;
+        }
+      }
+      final ids = tiles[key];
+      if (ids == null || ids.isEmpty) {
+        islandByCell.remove(cell);
+      } else {
+        islandByCell[cell] = BlockPlacement(
+            blockId: ids[_random.nextInt(ids.length)], gridX: x, gridY: y);
+      }
+    }
+
     _saveToHistory();
-    _autotileGrassMask(mask);
+    state = state.copyWith(
+      islandGrassMask: () => mask,
+      placements: [...others, ...islandByCell.values],
+      statusMessage: () => 'Painted grass (${mask.length} cells)',
+    );
   }
 
   Set<(int, int)> _ensureGrassMask() {
@@ -1324,14 +1394,8 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
       for (final s in convexSetSignatures)
         if (!tiles.containsKey(sigKey(s))) islandKindLabel(s),
     ];
-    if (missingConvex.isNotEmpty) {
-      state = state.copyWith(
-        islandGrassMask: () => mask,
-        statusMessage: () =>
-            'Cannot generate: missing ${missingConvex.toSet().join(", ")} tile(s)',
-      );
-      return;
-    }
+    // Place whatever matches even if the convex set is incomplete, and
+    // report what is missing, rather than refusing to place anything.
 
     final grid = List.generate(
       GridConstants.levelGridRows,
@@ -1350,15 +1414,17 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
       for (final p in state.placements)
         if (layerOf(p) != MapLayer.island) p,
     ];
+    final hint = missingConvex.isNotEmpty
+        ? ' (missing ${missingConvex.toSet().join(", ")} tiles)'
+        : result.unmatched > 0
+            ? ' (${result.unmatched} cells unmatched -- add concave corners)'
+            : '';
     state = state.copyWith(
       islandGrassMask: () => mask,
       placements: [...kept, ...result.placements],
       selection: const {},
       selectedPlacementIndex: () => null,
-      statusMessage: () => result.unmatched == 0
-          ? 'Autotiled ${result.placements.length} island tiles'
-          : 'Autotiled ${result.placements.length} tiles; ${result.unmatched} '
-              'cell(s) unmatched (add concave corners for notches)',
+      statusMessage: () => 'Autotiled ${result.placements.length} tiles$hint',
     );
   }
 

@@ -104,6 +104,26 @@ DirSet cellSignature(List<List<int>> grid, int x, int y, int cols, int rows) {
   return sig;
 }
 
+/// Signature of a grass cell computed directly from a cell set (for
+/// incremental retiling), matching [cellSignature]'s canonical rules.
+DirSet cellSignatureFromSet(Set<(int, int)> grass, int x, int y) {
+  bool g(int nx, int ny) => grass.contains((nx, ny));
+  final up = g(x, y - 1);
+  final down = g(x, y + 1);
+  final left = g(x - 1, y);
+  final right = g(x + 1, y);
+  final sig = <PortDirection>{};
+  if (up) sig.add(PortDirection.up);
+  if (down) sig.add(PortDirection.down);
+  if (left) sig.add(PortDirection.left);
+  if (right) sig.add(PortDirection.right);
+  if (up && right && g(x + 1, y - 1)) sig.add(PortDirection.diagUR);
+  if (up && left && g(x - 1, y - 1)) sig.add(PortDirection.diagUL);
+  if (down && right && g(x + 1, y + 1)) sig.add(PortDirection.diagDR);
+  if (down && left && g(x - 1, y + 1)) sig.add(PortDirection.diagDL);
+  return sig;
+}
+
 class IslandAutotileResult {
   const IslandAutotileResult({
     required this.placements,
