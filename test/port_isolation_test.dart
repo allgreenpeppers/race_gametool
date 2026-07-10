@@ -126,28 +126,4 @@ void main() {
     expect(sel.length, 1);
     expect(read().placements[sel.first].blockId, 'straight');
   });
-
-  test('insert straight works with island tiles present', () {
-    // A second track straight, adjacent, so a seam exists at x15.
-    notifier.selectPalette('straight');
-    notifier.stampAt(15, 10); // covers x15..19
-    // An island tile overlapping the seam (island layer, under the track).
-    notifier.setLayer(MapLayer.island);
-    notifier.selectPalette('grass');
-    notifier.stampAt(15, 10);
-    notifier.setLayer(MapLayer.track);
-
-    final before = read().placements.length; // 3
-    final seam = notifier.insertSeamAt(15, 10);
-    expect(seam, isNotNull);
-    notifier.insertStraightAtSeam(seam!);
-
-    // One straight inserted; the island tile is untouched (not shifted or
-    // rejected for "overlap").
-    expect(read().placements.length, before + 1);
-    expect(
-        read().placements.any(
-            (p) => p.blockId == 'grass' && p.gridX == 15 && p.gridY == 10),
-        isTrue);
-  });
 }

@@ -1,6 +1,8 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants.dart';
@@ -31,8 +33,6 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
 
   final TransformationController _transform = TransformationController();
   bool _centered = false;
-  (int, int)? _dragStartCell;
-  Axis? _dragLockedAxis;
 
   @override
   void initState() {
@@ -149,10 +149,7 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
         ? notifier.occupiedCells()
         : null;
 
-    // Seam markers for the Insert tool.
-    final insertMarkers = state.tool == LevelTool.insert && portsEnabled
-        ? notifier.insertSeamBoundaryCells()
-        : null;
+
 
     void handleTap(Offset local, Offset global) {
       Focus.of(context).requestFocus();
@@ -174,17 +171,7 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
           notifier.selectAt(x, y);
         case LevelTool.multi:
           notifier.selectSingleAt(x, y);
-        case LevelTool.insert:
-          if (!portsEnabled) {
-            notifier.setStatus('Island layer is auto-generated, not wired');
-            break;
-          }
-          final seam = notifier.insertSeamAt(x, y);
-          if (seam != null) {
-            notifier.insertStraightAtSeam(seam);
-          } else {
-            notifier.setStatus('Tap a + on a seam to insert a straight');
-          }
+
         case LevelTool.spawn:
           notifier.setSpawnAt(x, y);
         case LevelTool.connect:
@@ -210,11 +197,10 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
 
     void handleDragCell((int, int) cell) {
       final (x, y) = cell;
+      notifier.setHover((x, y));
       if (state.tool == LevelTool.stamp) {
         if (state.activeLayer == MapLayer.island) {
           notifier.paintGrassAt(x, y, erase: false);
-        } else {
-          notifier.stampAt(x, y);
         }
       } else if (state.tool == LevelTool.erase) {
         if (state.activeLayer == MapLayer.island) {
@@ -235,83 +221,123 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
       minScale: 0.2,
       maxScale: 10,
       boundaryMargin: const EdgeInsets.all(400),
-      child: MouseRegion(
-        onHover: (event) => notifier.setHover(_toCell(event.localPosition)),
-        onExit: (_) => notifier.setHover(null),
-        child: GestureDetector(
-          onTapUp: (d) => handleTap(d.localPosition, d.globalPosition),
-          // Stamp/erase paint on drag; Multi marquee-selects or moves the
-          // selection; select and connect leave drags to InteractiveViewer.
-          onPanStart: !usesDrag
-              ? null
-              : (d) {
-                  Focus.of(context).requestFocus();
-                  final (x, y) = _toCell(d.localPosition);
-                  if (state.tool == LevelTool.multi) {
-                    notifier.multiDragStart(x, y);
-                  } else {
-                    _dragStartCell = (x, y);
-                    _dragLockedAxis = null;
-                    handleDragCell((x, y));
-                  }
-                },
-          onPanUpdate: !usesDrag
-              ? null
-              : (d) {
-                  final (x, y) = _toCell(d.localPosition);
-                  if (state.tool == LevelTool.multi) {
-                    notifier.multiDragUpdate(x, y);
-                  } else {
-                    final start = _dragStartCell;
-                    if (start != null) {
-                      var cx = x;
-                      var cy = y;
-                      if (_dragLockedAxis == null) {
-                        final dx = (cx - start.$1).abs();
-                        final dy = (cy - start.$2).abs();
-                        if (dx >= dy && dx > 0) {
-                          _dragLockedAxis = Axis.horizontal;
-                        } else if (dy > dx && dy > 0) {
-                          _dragLockedAxis = Axis.vertical;
+      child: Listener(
+        onPointerMove: (event) {
+          if (event.buttons == kMiddleMouseButton) {
+            final matrix = _transform.value.clone();
+            matrix.storage[12] += event.delta.dx;
+            matrix.storage[13] += event.delta.dy;
+            _transform.value = matrix;
+          }
+        },
+        onPointerSignal: (event) {
+          if (event is PointerScrollEvent) {
+            final isZoomKey = HardwareKeyboard.instance.isControlPressed ||
+                HardwareKeyboard.instance.isMetaPressed;
+            if (isZoomKey) {
+              final double dy = event.scrollDelta.dy;
+              if (dy != 0) {
+                final double scaleDelta = dy > 0 ? 0.9 : 1.1;
+                final matrix = _transform.value.clone();
+                final double tx = matrix.storage[12];
+                final double ty = matrix.storage[13];
+                final double currentScale = matrix.getMaxScaleOnAxis();
+                const minScale = 0.2;
+                const maxScale = 10.0;
+                final double newScale = (currentScale * scaleDelta).clamp(minScale, maxScale);
+                final double actualFactor = newScale / currentScale;
+                if (actualFactor != 1.0) {
+                  final px = event.localPosition.dx;
+                  final py = event.localPosition.dy;
+                  matrix.storage[0] *= actualFactor;
+                  matrix.storage[5] *= actualFactor;
+                  matrix.storage[10] *= actualFactor;
+                  matrix.storage[12] = px + (tx - px) * actualFactor;
+                  matrix.storage[13] = py + (ty - py) * actualFactor;
+                  _transform.value = matrix;
+                }
+              }
+            } else {
+              final matrix = _transform.value.clone();
+              matrix.storage[12] -= event.scrollDelta.dx;
+              matrix.storage[13] -= event.scrollDelta.dy;
+              _transform.value = matrix;
+            }
+          }
+        },
+        child: MouseRegion(
+          onHover: (event) => notifier.setHover(_toCell(event.localPosition)),
+          onExit: (_) => notifier.setHover(null),
+          child: RawGestureDetector(
+            gestures: {
+              if (usesDrag)
+                LeftClickPanGestureRecognizer: GestureRecognizerFactoryWithHandlers<LeftClickPanGestureRecognizer>(
+                  () => LeftClickPanGestureRecognizer(
+                    allowedButtonsFilter: (int buttons) => buttons == kPrimaryButton,
+                  ),
+                  (LeftClickPanGestureRecognizer instance) {
+                    instance
+                      ..onStart = (d) {
+                        Focus.of(context).requestFocus();
+                        final (x, y) = _toCell(d.localPosition);
+                        if (state.tool == LevelTool.multi) {
+                          notifier.multiDragStart(x, y);
+                        } else {
+                          handleDragCell((x, y));
                         }
                       }
-                      if (_dragLockedAxis == Axis.horizontal) {
-                        cy = start.$2;
-                      } else if (_dragLockedAxis == Axis.vertical) {
-                        cx = start.$1;
+                      ..onUpdate = (d) {
+                        final (x, y) = _toCell(d.localPosition);
+                        if (state.tool == LevelTool.multi) {
+                          notifier.multiDragUpdate(x, y);
+                        } else {
+                          handleDragCell((x, y));
+                        }
                       }
-                      handleDragCell((cx, cy));
-                    }
-                  }
+                      ..onEnd = (_) {
+                        if (state.tool == LevelTool.multi) {
+                          notifier.multiDragEnd(
+                              cols: LevelCanvas.cols, rows: LevelCanvas.rows);
+                        } else if (state.tool == LevelTool.stamp) {
+                          if (state.activeLayer != MapLayer.island) {
+                            final hover = state.hoverCell;
+                            if (hover != null) {
+                              notifier.stampAt(hover.$1, hover.$2);
+                            }
+                          }
+                        }
+                      };
+                  },
+                ),
+              TapGestureRecognizer: GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+                () => TapGestureRecognizer(
+                  allowedButtonsFilter: (int buttons) => buttons == kPrimaryButton,
+                ),
+                (TapGestureRecognizer instance) {
+                  instance.onTapUp = (d) => handleTap(d.localPosition, d.globalPosition);
                 },
-          onPanEnd: (_) {
-            _dragStartCell = null;
-            _dragLockedAxis = null;
-            if (state.tool == LevelTool.multi) {
-              notifier.multiDragEnd(
-                  cols: LevelCanvas.cols, rows: LevelCanvas.rows);
-            }
-          },
-          child: CustomPaint(
-            size: const Size(
-                LevelCanvas.cols * _cell, LevelCanvas.rows * _cell),
-            painter: _LevelPainter(
-              blocks: library,
-              placements: state.placements,
-              tool: state.tool,
-              hoverCell: state.hoverCell,
-              stampId: state.selectedPaletteId,
-              rectOf: notifier.rectOf,
-              occupied: occupied,
-              extendPreview: state.extendPreview,
-              selection: state.highlighted,
-              marquee: state.marquee,
-              groupDelta: state.groupDelta,
-              insertMarkers: insertMarkers,
-              spawn: state.spawn,
-              activeLayer: state.activeLayer,
-              islandGrassMask: state.islandGrassMask,
-              islandBrushRadius: state.islandBrushRadius,
+              ),
+            },
+            child: CustomPaint(
+              size: const Size(
+                  LevelCanvas.cols * _cell, LevelCanvas.rows * _cell),
+              painter: _LevelPainter(
+                blocks: library,
+                placements: state.placements,
+                tool: state.tool,
+                hoverCell: state.hoverCell,
+                stampId: state.selectedPaletteId,
+                rectOf: notifier.rectOf,
+                occupied: occupied,
+                extendPreview: state.extendPreview,
+                selection: state.highlighted,
+                marquee: state.marquee,
+                groupDelta: state.groupDelta,
+                spawn: state.spawn,
+                activeLayer: state.activeLayer,
+                islandGrassMask: state.islandGrassMask,
+                islandBrushRadius: state.islandBrushRadius,
+              ),
             ),
           ),
         ),
@@ -333,7 +359,6 @@ class _LevelPainter extends CustomPainter {
     required this.selection,
     required this.marquee,
     required this.groupDelta,
-    required this.insertMarkers,
     required this.spawn,
     required this.activeLayer,
     required this.islandGrassMask,
@@ -351,7 +376,6 @@ class _LevelPainter extends CustomPainter {
   final Set<int> selection;
   final (int, int, int, int)? marquee;
   final (int, int)? groupDelta;
-  final List<(int, int)>? insertMarkers;
   final SpawnPoint? spawn;
   final MapLayer activeLayer;
   final Set<(int, int)>? islandGrassMask;
@@ -389,21 +413,27 @@ class _LevelPainter extends CustomPainter {
     _paintExtendPreview(canvas);
     _paintGroupMove(canvas);
     _paintMarquee(canvas);
-    _paintInsertMarkers(canvas);
     _paintSpawn(canvas);
   }
 
   void _paintAlignmentGuides(Canvas canvas, Size size) {
     final hover = hoverCell;
-    if (hover == null) return;
+    if (hover == null) {
+      return;
+    }
+    if (tool != LevelTool.stamp &&
+        tool != LevelTool.erase &&
+        tool != LevelTool.connect) {
+      return;
+    }
 
     final paint = Paint()
       ..color = Colors.cyan.withValues(alpha: 0.35)
       ..strokeWidth = 1.0
       ..style = PaintingStyle.stroke;
 
-    final cx = (hover.$1 + 0.5) * _cell;
-    final cy = (hover.$2 + 0.5) * _cell;
+    final cx = (hover.$1 + 0.5) * _cell + 0.5;
+    final cy = (hover.$2 + 0.5) * _cell + 0.5;
 
     // Vertical guide line
     canvas.drawLine(Offset(cx, 0), Offset(cx, size.height), paint);
@@ -461,14 +491,7 @@ class _LevelPainter extends CustomPainter {
     }
   }
 
-  void _paintInsertMarkers(Canvas canvas) {
-    final markers = insertMarkers;
-    if (markers == null) return;
-    for (final (cx, cy) in markers) {
-      _paintPlus(canvas, Offset((cx + 0.5) * _cell, (cy + 0.5) * _cell),
-          _cell * 0.45);
-    }
-  }
+
 
   void _paintGroupMove(Canvas canvas) {
     final delta = groupDelta;
@@ -790,9 +813,19 @@ class _LevelPainter extends CustomPainter {
       old.selection != selection ||
       old.marquee != marquee ||
       old.groupDelta != groupDelta ||
-      old.insertMarkers != insertMarkers ||
       old.spawn != spawn ||
       old.activeLayer != activeLayer ||
       old.islandGrassMask != islandGrassMask ||
       old.islandBrushRadius != islandBrushRadius;
+}
+
+class LeftClickPanGestureRecognizer extends PanGestureRecognizer {
+  LeftClickPanGestureRecognizer({
+    super.allowedButtonsFilter,
+  });
+
+  @override
+  void addAllowedPointerPanZoom(PointerPanZoomStartEvent event) {
+    // Ignore trackpad pan-zoom events so they fall through to InteractiveViewer.
+  }
 }

@@ -6,7 +6,7 @@ A new Flutter project.
 
 - [X] In Level editor, use multi layer and only show the block is for that layer.
 
-  - [ ] Function layer (check line and wall) — layer exists; no placeable wall/check-line blocks yet
+  - [ ] Function layer (check line (ordered) )and wall),invisible — layer exists; no placeable wall/check-line blocks yet
   - [X] Decoration layer (finish line and other decoration)
   - [X] Track layer
   - [X] Island layer
@@ -26,7 +26,9 @@ A new Flutter project.
 - [X] Import map
 - [X] Auto resize in phase 1
 - [X] Drag to stamp in phase 2
-- [ ] Remove insert and remove to close in phase 2/track
-- [ ] More accuracy in trackpad guesture / tool change automatically
+- [X] Remove insert and remove to close in phase 2/track
+- [X] More accuracy in trackpad guesture / tool change automatically
 - [X] Fix: autofill, clear.
 - [X] Add icon
+- [X] Fix: Can not move the background with select in phase 2
+- [X] Show cursor line only in phase 2 stamp/eraser mode

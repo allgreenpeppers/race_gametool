@@ -8,7 +8,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/constants.dart';
 import '../logic/island_generator.dart';
 import '../logic/island_tiles.dart';
-import '../logic/track_topology.dart';
 import '../models/block_def.dart';
 import '../models/map_scene.dart';
 import '../models/port.dart';
@@ -20,7 +19,6 @@ enum LevelTool {
   multi('Multi'),
   stamp('Stamp'),
   connect('Connect'),
-  insert('Insert'),
   spawn('Spawn'),
   erase('Erase');
 
@@ -352,7 +350,6 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
     LevelTool nextTool = state.tool;
     if (layer == MapLayer.island || layer == MapLayer.decoration) {
       if (nextTool == LevelTool.connect ||
-          nextTool == LevelTool.insert ||
           nextTool == LevelTool.spawn) {
         nextTool = LevelTool.stamp;
       }
@@ -719,7 +716,7 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
     }
   }
 
-  void stampAt(int gridX, int gridY) {
+  void stampAt(int gridX, int gridY, {bool changeTool = true}) {
     final id = state.selectedPaletteId;
     if (id == null) {
       state = state.copyWith(
@@ -735,9 +732,15 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
     }
     _saveToHistory();
     final placement = BlockPlacement(blockId: id, gridX: x, gridY: y);
+    final nextTool = changeTool &&
+            (state.activeLayer == MapLayer.track ||
+                state.activeLayer == MapLayer.function)
+        ? LevelTool.connect
+        : state.tool;
     state = state.copyWith(
       placements: [...state.placements, placement],
       selectedPlacementIndex: () => state.placements.length,
+      tool: nextTool,
       statusMessage: () => 'Placed $id at ($x, $y)',
     );
   }
@@ -1007,228 +1010,6 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
     );
   }
 
-  // --- Insert / delete straight at a seam (auto-shift downstream) -----------
-
-  List<Seam> _seams() => findSeams(state.placements, _def);
-
-  /// A direction is "forward" if it points right or down; inserting/removing
-  /// keeps the near (up/left) side fixed and shifts the far side.
-  static bool _isForward(PortDirection d) {
-    final (dx, dy) = d.gridDelta;
-    return dy > 0 || (dy == 0 && dx > 0);
-  }
-
-  /// Seams eligible for an insert marker: one per boundary (the forward
-  /// direction), whose near side has a same-span straight to insert.
-  List<Seam> insertSeams() => _seams()
-      .where((s) =>
-          _isForward(s.dir) && onActiveLayer(state.placements[s.nearIndex]))
-      .toList();
-
-  /// Pixel-centre of each insert seam's boundary, for drawing "+" markers.
-  List<(int, int)> insertSeamBoundaryCells() {
-    final cells = <(int, int)>[];
-    for (final s in insertSeams()) {
-      final near = state.placements[s.nearIndex];
-      final def = _def(near.blockId);
-      if (def == null) continue;
-      final outward = portOutwardCells(
-          near.gridX, near.gridY, def.ports[s.nearPortIndex], s.dir);
-      cells.add(outward[outward.length ~/ 2]);
-    }
-    return cells;
-  }
-
-  /// The forward seam whose boundary contains the tapped cell, if any.
-  Seam? insertSeamAt(int cellX, int cellY) {
-    for (final s in insertSeams()) {
-      final near = state.placements[s.nearIndex];
-      final def = _def(near.blockId);
-      if (def == null) continue;
-      final outward = portOutwardCells(
-          near.gridX, near.gridY, def.ports[s.nearPortIndex], s.dir);
-      if (outward.contains((cellX, cellY))) return s;
-    }
-    return null;
-  }
-
-  /// First library block that can bridge a gap along [dir] with the given
-  /// [span]: it needs a port facing back (dir.opposite) and one facing on
-  /// (dir), both of matching span. Returns the block and its near-port index.
-  (BlockDef, int)? _straightConnector(PortDirection dir, int span) {
-    for (final def in _blocks) {
-      // Same-layer isolation: only bridge with blocks of the active layer.
-      if (MapLayer.forCategory(def.category) != state.activeLayer) continue;
-      if (!_isStraightTile(def)) continue;
-      final nearIdx = def.ports.indexWhere((p) =>
-          p.span == span &&
-          portOutwardDirections(def, p).contains(dir.opposite));
-      if (nearIdx == -1) continue;
-      final hasFar = def.ports.any((p) =>
-          p.span == span && portOutwardDirections(def, p).contains(dir));
-      if (!hasFar) continue;
-      return (def, nearIdx);
-    }
-    return null;
-  }
-
-  /// Validates a proposed placement list after an insert/delete shift.
-  /// Overlap is only a conflict WITHIN a layer (category); an island tile
-  /// sitting under a track piece is expected and ignored.
-  String? _validateLayout(List<BlockPlacement> list) {
-    final rects = <CellRect>[];
-    final layers = <MapLayer?>[];
-    for (final p in list) {
-      final def = _def(p.blockId);
-      if (def == null) continue;
-      if (p.gridX < 0 ||
-          p.gridY < 0 ||
-          p.gridX + def.boundingBox.width > GridConstants.levelGridCols ||
-          p.gridY + def.boundingBox.height > GridConstants.levelGridRows) {
-        return 'Shift would leave the grid';
-      }
-      rects.add(CellRect(
-          p.gridX, p.gridY, def.boundingBox.width, def.boundingBox.height));
-      layers.add(MapLayer.forCategory(def.category));
-    }
-    for (var a = 0; a < rects.length; a++) {
-      for (var b = a + 1; b < rects.length; b++) {
-        if (layers[a] == layers[b] && rects[a].overlaps(rects[b])) {
-          return 'Shift would overlap blocks';
-        }
-      }
-    }
-    return null;
-  }
-
-  /// Inserts a straight at [seam], pushing the far-side connected component
-  /// outward by one tile-length and dropping the straight into the gap.
-  void insertStraightAtSeam(Seam seam) {
-    final placements = state.placements;
-    final adj = buildAdjacency(placements.length, _seams());
-    final far = reachable(adj, seam.farIndex,
-        edgeA: seam.nearIndex, edgeB: seam.farIndex);
-    if (far.contains(seam.nearIndex)) {
-      state = state.copyWith(
-          statusMessage: () => 'Cannot insert into a closed loop');
-      return;
-    }
-    final conn = _straightConnector(seam.dir, seam.span);
-    if (conn == null) {
-      state = state.copyWith(
-          statusMessage: () =>
-              'No straight tile of span ${seam.span} to insert');
-      return;
-    }
-    final (sdef, straightNearPort) = conn;
-    final (dx, dy) = seam.dir.gridDelta;
-    final length =
-        dx != 0 ? sdef.boundingBox.width : sdef.boundingBox.height;
-
-    final near = state.placements[seam.nearIndex];
-    final ndef = _def(near.blockId)!;
-    final outward = portOutwardCells(
-        near.gridX, near.gridY, ndef.ports[seam.nearPortIndex], seam.dir);
-    final (ox, oy) = outward.first; // min corner of the gap
-    final straightX = ox - sdef.ports[straightNearPort].localGridX;
-    final straightY = oy - sdef.ports[straightNearPort].localGridY;
-
-    final newList = <BlockPlacement>[
-      for (var i = 0; i < placements.length; i++)
-        if (far.contains(i))
-          placements[i].copyWith(
-              gridX: placements[i].gridX + dx * length,
-              gridY: placements[i].gridY + dy * length)
-        else
-          placements[i],
-      BlockPlacement(blockId: sdef.id, gridX: straightX, gridY: straightY),
-    ];
-
-    final err = _validateLayout(newList);
-    if (err != null) {
-      state = state.copyWith(statusMessage: () => err);
-      return;
-    }
-    _saveToHistory();
-    state = state.copyWith(
-      placements: newList,
-      selectedPlacementIndex: () => newList.length - 1,
-      selection: const {},
-      statusMessage: () => 'Inserted ${sdef.id} at the seam',
-    );
-  }
-
-  /// Deletes the block at [index]; if it is a straight connected on two
-  /// opposite sides, the far-side component slides back to close the gap.
-  void deleteStraightAndClose(int index) {
-    final def = _def(state.placements[index].blockId);
-    if (def == null) {
-      _removeAt(index);
-      return;
-    }
-    final allSeams = _seams();
-    Seam? forward;
-    for (final s in allSeams) {
-      if (s.nearIndex == index && _isForward(s.dir)) {
-        forward = s;
-        break;
-      }
-    }
-    Seam? back;
-    if (forward != null) {
-      for (final s in allSeams) {
-        if (s.nearIndex == index && s.dir == forward.dir.opposite) {
-          back = s;
-          break;
-        }
-      }
-    }
-    // Not a through-straight (dangling or unconnected): plain remove.
-    if (forward == null || back == null) {
-      _removeAt(index);
-      return;
-    }
-
-    final (dx, dy) = forward.dir.gridDelta;
-    final length = dx != 0 ? def.boundingBox.width : def.boundingBox.height;
-    final adjNoIndex = buildAdjacency(
-        state.placements.length,
-        allSeams
-            .where((s) => s.nearIndex != index && s.farIndex != index)
-            .toList());
-    final far = reachable(adjNoIndex, forward.farIndex);
-    if (far.contains(back.farIndex)) {
-      // Removing would leave a loop; cannot close cleanly, just remove.
-      _removeAt(index);
-      state = state.copyWith(
-          statusMessage: () => 'Removed straight (loop: gap left open)');
-      return;
-    }
-
-    final newList = <BlockPlacement>[
-      for (var i = 0; i < state.placements.length; i++)
-        if (i != index)
-          if (far.contains(i))
-            state.placements[i].copyWith(
-                gridX: state.placements[i].gridX - dx * length,
-                gridY: state.placements[i].gridY - dy * length)
-          else
-            state.placements[i],
-    ];
-    final err = _validateLayout(newList);
-    if (err != null) {
-      state = state.copyWith(statusMessage: () => err);
-      return;
-    }
-    _saveToHistory();
-    state = state.copyWith(
-      placements: newList,
-      selectedPlacementIndex: () => null,
-      selection: const {},
-      statusMessage: () => 'Removed straight and closed the gap',
-    );
-  }
-
   // --- Spawn point and export -----------------------------------------------
 
   void setSpawnFacing(PortDirection dir) {
@@ -1394,10 +1175,7 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
   }
 
   Set<(int, int)> _ensureGrassMask() {
-    if (state.islandGrassMask != null) {
-      return state.islandGrassMask!;
-    }
-    return _generateDefaultGrassMask();
+    return state.islandGrassMask ?? <(int, int)>{};
   }
 
   Set<(int, int)> _generateDefaultGrassMask() {

@@ -1,7 +1,9 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants.dart';
@@ -99,35 +101,94 @@ class _MaskCanvasState extends ConsumerState<MaskCanvas> {
       // Pan handlers are registered only for the drawing tools; in Select
       // mode single-pointer drags fall through to InteractiveViewer so the
       // canvas can be panned with the mouse.
-      child: GestureDetector(
-        onTapUp: (details) {
-          final (x, y) = toCell(details.localPosition);
-          notifier.tapCell(x, y);
+      child: Listener(
+        onPointerMove: (event) {
+          if (event.buttons == kMiddleMouseButton) {
+            final matrix = _transform.value.clone();
+            matrix.storage[12] += event.delta.dx;
+            matrix.storage[13] += event.delta.dy;
+            _transform.value = matrix;
+          }
         },
-        onPanStart: !usesDrag
-            ? null
-            : (details) {
-                final (x, y) = toCell(details.localPosition);
-                notifier.dragStart(x, y);
+        onPointerSignal: (event) {
+          if (event is PointerScrollEvent) {
+            final isZoomKey = HardwareKeyboard.instance.isControlPressed ||
+                HardwareKeyboard.instance.isMetaPressed;
+            if (isZoomKey) {
+              final double dy = event.scrollDelta.dy;
+              if (dy != 0) {
+                final double scaleDelta = dy > 0 ? 0.9 : 1.1;
+                final matrix = _transform.value.clone();
+                final double tx = matrix.storage[12];
+                final double ty = matrix.storage[13];
+                final double currentScale = matrix.getMaxScaleOnAxis();
+                const minScale = 0.15;
+                const maxScale = 12.0;
+                final double newScale = (currentScale * scaleDelta).clamp(minScale, maxScale);
+                final double actualFactor = newScale / currentScale;
+                if (actualFactor != 1.0) {
+                  final px = event.localPosition.dx;
+                  final py = event.localPosition.dy;
+                  matrix.storage[0] *= actualFactor;
+                  matrix.storage[5] *= actualFactor;
+                  matrix.storage[10] *= actualFactor;
+                  matrix.storage[12] = px + (tx - px) * actualFactor;
+                  matrix.storage[13] = py + (ty - py) * actualFactor;
+                  _transform.value = matrix;
+                }
+              }
+            } else {
+              final matrix = _transform.value.clone();
+              matrix.storage[12] -= event.scrollDelta.dx;
+              matrix.storage[13] -= event.scrollDelta.dy;
+              _transform.value = matrix;
+            }
+          }
+        },
+        child: RawGestureDetector(
+          gestures: {
+            if (usesDrag)
+              LeftClickPanGestureRecognizer: GestureRecognizerFactoryWithHandlers<LeftClickPanGestureRecognizer>(
+                () => LeftClickPanGestureRecognizer(
+                  allowedButtonsFilter: (int buttons) => buttons == kPrimaryButton,
+                ),
+                (LeftClickPanGestureRecognizer instance) {
+                  instance
+                    ..onStart = (details) {
+                      final (x, y) = toCell(details.localPosition);
+                      notifier.dragStart(x, y);
+                    }
+                    ..onUpdate = (details) {
+                      final (x, y) = toCell(details.localPosition);
+                      notifier.dragUpdate(x, y);
+                    }
+                    ..onEnd = (_) => notifier.dragEnd();
+                },
+              ),
+            TapGestureRecognizer: GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+              () => TapGestureRecognizer(
+                allowedButtonsFilter: (int buttons) => buttons == kPrimaryButton,
+              ),
+              (TapGestureRecognizer instance) {
+                instance.onTapUp = (details) {
+                  final (x, y) = toCell(details.localPosition);
+                  notifier.tapCell(x, y);
+                };
               },
-        onPanUpdate: !usesDrag
-            ? null
-            : (details) {
-                final (x, y) = toCell(details.localPosition);
-                notifier.dragUpdate(x, y);
-              },
-        onPanEnd: !usesDrag ? null : (_) => notifier.dragEnd(),
-        child: CustomPaint(
-          size: Size(image.width.toDouble(), image.height.toDouble()),
-          painter: _MaskCanvasPainter(
-            image: image,
-            masks: state.masks,
-            selectedIndex: state.selectedIndex,
-            tool: state.tool,
-            dragPreview: state.dragPreview,
-            paintPreview: state.paintPreview,
-            movePreview: state.movePreview,
-            scale: _transform.value.getMaxScaleOnAxis(),
+            ),
+          },
+          child: CustomPaint(
+            size: Size(image.width.toDouble(), image.height.toDouble()),
+            painter: _MaskCanvasPainter(
+              image: image,
+              masks: state.masks,
+              selectedIndex: state.selectedIndex,
+              tool: state.tool,
+              dragPreview: state.dragPreview,
+              paintPreview: state.paintPreview,
+              movePreview: state.movePreview,
+              scale: _transform.value.getMaxScaleOnAxis(),
+            ),
           ),
         ),
       ),
@@ -353,4 +414,15 @@ class _MaskCanvasPainter extends CustomPainter {
       oldDelegate.paintPreview != paintPreview ||
       oldDelegate.movePreview != movePreview ||
       oldDelegate.scale != scale;
+}
+
+class LeftClickPanGestureRecognizer extends PanGestureRecognizer {
+  LeftClickPanGestureRecognizer({
+    super.allowedButtonsFilter,
+  });
+
+  @override
+  void addAllowedPointerPanZoom(PointerPanZoomStartEvent event) {
+    // Ignore trackpad pan-zoom events so they fall through to InteractiveViewer.
+  }
 }

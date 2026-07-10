@@ -493,7 +493,6 @@ class _AppShellState extends ConsumerState<AppShell> {
     final activeLayer = ref.watch(levelEditorProvider.select((s) => s.activeLayer));
     final levelTool = ref.watch(levelEditorProvider.select((s) => s.tool));
     final islandBrushRadius = ref.watch(levelEditorProvider.select((s) => s.islandBrushRadius));
-    final highlightedList = ref.watch(levelEditorProvider.select((s) => s.highlighted));
     final levelStatusMessage = ref.watch(levelEditorProvider.select((s) => s.statusMessage));
     final placementsLength = ref.watch(levelEditorProvider.select((s) => s.placements.length));
     final hasSpawn = ref.watch(levelEditorProvider.select((s) => s.spawn != null));
@@ -630,7 +629,6 @@ class _AppShellState extends ConsumerState<AppShell> {
                                   if ((activeLayer != MapLayer.island &&
                                           activeLayer != MapLayer.decoration) ||
                                       (tool != LevelTool.connect &&
-                                          tool != LevelTool.insert &&
                                           tool != LevelTool.spawn))
                                     ButtonSegment(
                                       value: tool,
@@ -640,7 +638,6 @@ class _AppShellState extends ConsumerState<AppShell> {
                                         LevelTool.multi => Icons.select_all,
                                         LevelTool.stamp => Icons.add_box_outlined,
                                         LevelTool.connect => Icons.hub_outlined,
-                                        LevelTool.insert => Icons.linear_scale,
                                         LevelTool.spawn => Icons.flag_outlined,
                                         LevelTool.erase => Icons.cleaning_services,
                                       }),
@@ -678,20 +675,7 @@ class _AppShellState extends ConsumerState<AppShell> {
                               const SizedBox(width: 12),
                             ],
 
-                            // Remove & Close Connection
-                            if (highlightedList.length == 1) ...[
-                              OutlinedButton.icon(
-                                onPressed: () => levelNotifier.deleteStraightAndClose(
-                                  highlightedList.first,
-                                ),
-                                style: OutlinedButton.styleFrom(
-                                  visualDensity: VisualDensity.compact,
-                                ),
-                                icon: const Icon(Icons.compress, size: 16),
-                                label: const Text('Remove & Close'),
-                              ),
-                              const SizedBox(width: 6),
-                            ],
+
                           ],
                         ],
                       ),
