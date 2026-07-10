@@ -24,8 +24,8 @@ A new Flutter project.
 - [X] Confirm before clear all
 - [X] Use window manager to create a desktop app with a custom window frame.
 - [X] Import map
-- [ ] Auto resize in phase 1
-- [ ] Drag to stamp in phase 2
+- [X] Auto resize in phase 1
+- [X] Drag to stamp in phase 2
 - [ ] Remove insert and remove to close in phase 2/track
 - [ ] More accuracy in trackpad guesture / tool change automatically
 - [X] Fix: autofill, clear.

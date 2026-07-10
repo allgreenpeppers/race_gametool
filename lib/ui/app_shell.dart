@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../models/block_def.dart';
-import '../models/port.dart';
 import '../state/app_providers.dart';
 import '../state/asset_definer_providers.dart';
 import '../state/file_open_service.dart';
@@ -494,7 +493,6 @@ class _AppShellState extends ConsumerState<AppShell> {
     final activeLayer = ref.watch(levelEditorProvider.select((s) => s.activeLayer));
     final levelTool = ref.watch(levelEditorProvider.select((s) => s.tool));
     final islandBrushRadius = ref.watch(levelEditorProvider.select((s) => s.islandBrushRadius));
-    final spawnFacing = ref.watch(levelEditorProvider.select((s) => s.spawnFacing));
     final highlightedList = ref.watch(levelEditorProvider.select((s) => s.highlighted));
     final levelStatusMessage = ref.watch(levelEditorProvider.select((s) => s.statusMessage));
     final placementsLength = ref.watch(levelEditorProvider.select((s) => s.placements.length));
@@ -644,7 +642,7 @@ class _AppShellState extends ConsumerState<AppShell> {
                                         LevelTool.connect => Icons.hub_outlined,
                                         LevelTool.insert => Icons.linear_scale,
                                         LevelTool.spawn => Icons.flag_outlined,
-                                        LevelTool.erase => Icons.delete_outline,
+                                        LevelTool.erase => Icons.cleaning_services,
                                       }),
                                     ),
                               ],
@@ -676,29 +674,6 @@ class _AppShellState extends ConsumerState<AppShell> {
                                 style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
                                 icon: const Icon(Icons.grass, size: 16),
                                 label: const Text('Autotile'),
-                              ),
-                              const SizedBox(width: 12),
-                            ],
-
-                            // Spawn Direction Dropdown
-                            if (levelTool == LevelTool.spawn) ...[
-                              const Text('Facing'),
-                              const SizedBox(width: 4),
-                              DropdownButton<PortDirection>(
-                                value: spawnFacing,
-                                isDense: true,
-                                items: const [
-                                  DropdownMenuItem(value: PortDirection.up, child: Text('Up')),
-                                  DropdownMenuItem(
-                                    value: PortDirection.right,
-                                    child: Text('Right'),
-                                  ),
-                                  DropdownMenuItem(value: PortDirection.down, child: Text('Down')),
-                                  DropdownMenuItem(value: PortDirection.left, child: Text('Left')),
-                                ],
-                                onChanged: (d) {
-                                  if (d != null) levelNotifier.setSpawnFacing(d);
-                                },
                               ),
                               const SizedBox(width: 12),
                             ],

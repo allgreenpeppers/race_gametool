@@ -33,9 +33,20 @@ class _MaskCanvasState extends ConsumerState<MaskCanvas> {
   ui.Image? _lastImage;
 
   @override
+  void initState() {
+    super.initState();
+    _transform.addListener(_onTransformChanged);
+  }
+
+  @override
   void dispose() {
+    _transform.removeListener(_onTransformChanged);
     _transform.dispose();
     super.dispose();
+  }
+
+  void _onTransformChanged() {
+    setState(() {});
   }
 
   @override
@@ -116,6 +127,7 @@ class _MaskCanvasState extends ConsumerState<MaskCanvas> {
             dragPreview: state.dragPreview,
             paintPreview: state.paintPreview,
             movePreview: state.movePreview,
+            scale: _transform.value.getMaxScaleOnAxis(),
           ),
         ),
       ),
@@ -132,6 +144,7 @@ class _MaskCanvasPainter extends CustomPainter {
     required this.dragPreview,
     required this.paintPreview,
     required this.movePreview,
+    required this.scale,
   });
 
   final ui.Image image;
@@ -141,6 +154,7 @@ class _MaskCanvasPainter extends CustomPainter {
   final DragPreview? dragPreview;
   final Set<Cell>? paintPreview;
   final MovePreview? movePreview;
+  final double scale;
 
   static const _cell = GridConstants.cellSize;
 
@@ -269,19 +283,20 @@ class _MaskCanvasPainter extends CustomPainter {
 
     if (mask.category != BlockCategory.islandTile) {
       // Block ID label above the box.
+      final fontSize = (12.0 / scale).clamp(4.0, 48.0);
       final textPainter = TextPainter(
         text: TextSpan(
           text: mask.id,
           style: TextStyle(
             color: borderColor,
-            fontSize: 12,
+            fontSize: fontSize,
             fontWeight: FontWeight.bold,
             shadows: const [Shadow(blurRadius: 3, color: Colors.black)],
           ),
         ),
         textDirection: TextDirection.ltr,
       )..layout();
-      textPainter.paint(canvas, origin + const Offset(2, -16));
+      textPainter.paint(canvas, origin + Offset(2 / scale, -(fontSize + 4) / scale));
     }
 
       for (final port in mask.ports) {
@@ -336,5 +351,6 @@ class _MaskCanvasPainter extends CustomPainter {
       oldDelegate.tool != tool ||
       oldDelegate.dragPreview != dragPreview ||
       oldDelegate.paintPreview != paintPreview ||
-      oldDelegate.movePreview != movePreview;
+      oldDelegate.movePreview != movePreview ||
+      oldDelegate.scale != scale;
 }

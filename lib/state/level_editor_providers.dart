@@ -1246,12 +1246,29 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
 
   void setSpawnAt(int gridX, int gridY) {
     _saveToHistory();
-    state = state.copyWith(
-      spawn: () => SpawnPoint(
-          gridX: gridX, gridY: gridY, facingAngle: state.spawnFacing.angle),
-      statusMessage: () =>
-          'Spawn at ($gridX, $gridY) facing ${state.spawnFacing.jsonValue}',
-    );
+    final current = state.spawn;
+    if (current != null && current.gridX == gridX && current.gridY == gridY) {
+      final nextFacing = switch (state.spawnFacing) {
+        PortDirection.up => PortDirection.right,
+        PortDirection.right => PortDirection.down,
+        PortDirection.down => PortDirection.left,
+        _ => PortDirection.up,
+      };
+      state = state.copyWith(
+        spawnFacing: nextFacing,
+        spawn: () => SpawnPoint(
+            gridX: gridX, gridY: gridY, facingAngle: nextFacing.angle),
+        statusMessage: () =>
+            'Rotated spawn at ($gridX, $gridY) to ${nextFacing.jsonValue}',
+      );
+    } else {
+      state = state.copyWith(
+        spawn: () => SpawnPoint(
+            gridX: gridX, gridY: gridY, facingAngle: state.spawnFacing.angle),
+        statusMessage: () =>
+            'Spawn at ($gridX, $gridY) facing ${state.spawnFacing.jsonValue}',
+      );
+    }
   }
 
   void clearSpawn() {

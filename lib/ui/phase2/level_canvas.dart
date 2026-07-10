@@ -702,6 +702,20 @@ class _LevelPainter extends CustomPainter {
       );
       return;
     }
+    if (tool == LevelTool.erase) {
+      final hover = hoverCell;
+      if (hover == null) return;
+      final rect = Rect.fromLTWH(hover.$1 * _cell, hover.$2 * _cell, _cell, _cell);
+      canvas.drawRect(rect, Paint()..color = Colors.redAccent.withValues(alpha: 0.18));
+      canvas.drawRect(
+        rect,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5
+          ..color = Colors.redAccent,
+      );
+      return;
+    }
 
     if (tool != LevelTool.stamp) return;
     final hover = hoverCell;
