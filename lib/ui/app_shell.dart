@@ -28,14 +28,45 @@ class _AppShellState extends ConsumerState<AppShell> {
     super.initState();
     // Start listening for .rgpack files opened from Finder.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(fileOpenServiceProvider).start();
+      ref.read(fileOpenServiceProvider).start(
+        onOpenRequest: () async {
+          final assetState = ref.read(assetDefinerProvider);
+          final assetNotifier = ref.read(assetDefinerProvider.notifier);
+          final levelState = ref.read(levelEditorProvider);
+          final levelNotifier = ref.read(levelEditorProvider.notifier);
+
+          if (assetState.isDirty) {
+            final proceed = await _promptUnsavedChanges(
+              title: 'Save Config Changes?',
+              content: 'Your asset config has unsaved changes. Do you want to save before opening the new config?',
+              onSave: () => assetNotifier.save(),
+            );
+            if (!proceed) {
+              return false;
+            }
+          }
+
+          if (levelState.isDirty) {
+            final proceed = await _promptUnsavedChanges(
+              title: 'Save Game Map Changes?',
+              content: 'Your level map has unsaved changes. Do you want to save before opening the new config?',
+              onSave: () => levelNotifier.save(),
+            );
+            if (!proceed) {
+              return false;
+            }
+          }
+
+          return true;
+        },
+      );
     });
   }
 
   Future<bool> _promptUnsavedChanges({
     required String title,
     required String content,
-    required VoidCallback onSave,
+    required Future<void> Function() onSave,
   }) async {
     final result = await showDialog<String>(
       context: context,
@@ -59,7 +90,7 @@ class _AppShellState extends ConsumerState<AppShell> {
       ),
     );
     if (result == 'save') {
-      onSave();
+      await onSave();
       return true;
     }
     return result == 'discard';

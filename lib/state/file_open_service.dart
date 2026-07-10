@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -14,34 +15,76 @@ class FileOpenService {
   final Ref _ref;
   static const _channel = MethodChannel('app.rgpack/open');
   bool _started = false;
+  Future<bool> Function()? _onOpenRequest;
 
   /// Wires up the channel and drains any file the app was launched with.
   /// Safe to call more than once.
-  Future<void> start() async {
+  Future<void> start({Future<bool> Function()? onOpenRequest}) async {
+    if (onOpenRequest != null) {
+      _onOpenRequest = onOpenRequest;
+    }
     if (_started) return;
     _started = true;
 
     _channel.setMethodCallHandler((call) async {
+      debugPrint('FileOpenChannel: received method ${call.method}');
       if (call.method == 'openFile' && call.arguments is String) {
-        await _open(call.arguments as String);
+        final path = call.arguments as String;
+        debugPrint('FileOpenChannel: path is $path');
+        bool proceed = true;
+        if (_onOpenRequest != null) {
+          try {
+            debugPrint('FileOpenChannel: calling onOpenRequest');
+            proceed = await _onOpenRequest!();
+            debugPrint('FileOpenChannel: onOpenRequest returned $proceed');
+          } catch (e, stack) {
+            debugPrint('FileOpenChannel: error in onOpenRequest: $e\n$stack');
+            proceed = true; // Fallback to true so we still open the file
+          }
+        }
+        if (proceed) {
+          debugPrint('FileOpenChannel: opening file $path');
+          await _open(path);
+        }
       }
       return null;
     });
 
     try {
+      debugPrint('FileOpenChannel: invoking getPendingFile');
       final pending = await _channel.invokeMethod<String>('getPendingFile');
+      debugPrint('FileOpenChannel: getPendingFile returned $pending');
       if (pending != null && pending.isNotEmpty) {
-        await _open(pending);
+        bool proceed = true;
+        if (_onOpenRequest != null) {
+          try {
+            debugPrint('FileOpenChannel: calling onOpenRequest for pending file');
+            proceed = await _onOpenRequest!();
+            debugPrint('FileOpenChannel: onOpenRequest for pending returned $proceed');
+          } catch (e, stack) {
+            debugPrint('FileOpenChannel: error in onOpenRequest for pending: $e\n$stack');
+            proceed = true; // Fallback to true so we still open the file
+          }
+        }
+        if (proceed) {
+          debugPrint('FileOpenChannel: opening pending file $pending');
+          await _open(pending);
+        }
       }
     } on MissingPluginException {
-      // Not running on a platform that provides the channel (e.g. tests).
+      debugPrint('FileOpenChannel: MissingPluginException');
     }
   }
 
   Future<void> _open(String path) async {
-    // Bring Phase 1 forward, then load the bundle into the editor.
-    _ref.read(appModeProvider.notifier).select(AppMode.assetDefiner);
-    await _ref.read(assetDefinerProvider.notifier).openBundleFromPath(path);
+    debugPrint('FileOpenChannel: _open called for path $path');
+    try {
+      _ref.read(appModeProvider.notifier).select(AppMode.assetDefiner);
+      await _ref.read(assetDefinerProvider.notifier).openBundleFromPath(path);
+      debugPrint('FileOpenChannel: openBundleFromPath succeeded');
+    } catch (e, stack) {
+      debugPrint('FileOpenChannel: error inside _open: $e\n$stack');
+    }
   }
 }
 
