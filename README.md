@@ -17,4 +17,6 @@ A new Flutter project.
     - [x] When a kind has more than one tile, pick one at random.
     - [x] Auto: grow the island from the track footprint (+4 cells, smoothed) and autotile by each cell's 8-neighbour grass mask.
     - [ ] Manual grass brush to paint/erase the 1/0 island region before autotiling.
+- [ ] Undo
+- [ ] Confirm before clear all
 - [ ] Use window manager to create a desktop app with a custom window frame.

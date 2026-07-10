@@ -97,6 +97,20 @@ void main() {
     expect(read().placements.length, before + 1);
   });
 
+  test('connect click is not intercepted by island tiles', () {
+    // An island tile placed so its "+" lands on the track straight's
+    // RIGHT "+" cell (15, 10). Island tiles are added last (higher index)
+    // and would otherwise win the top-down hit test.
+    notifier.setLayer(MapLayer.island);
+    notifier.selectPalette('grass');
+    notifier.stampAt(16, 10);
+    notifier.setLayer(MapLayer.track);
+
+    final hit = notifier.connectPortAt(15, 10);
+    expect(hit, isNotNull);
+    expect(read().placements[hit!.ref.placementIndex].blockId, 'straight');
+  });
+
   test('marquee on the track layer ignores overlapping island tiles', () {
     // An island tile sitting under the track straight.
     notifier.setLayer(MapLayer.island);

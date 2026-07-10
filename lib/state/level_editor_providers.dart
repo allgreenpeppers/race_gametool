@@ -389,9 +389,12 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
   /// port strip itself (picking a free side).
   ConnectHit? connectPortAt(int cellX, int cellY) {
     final occ = occupiedCells();
-    // Priority 1: the outward "+" cell of a specific free side.
+    // Priority 1: the outward "+" cell of a specific free side. Only the
+    // active layer is considered, so island tiles (which have 8-direction
+    // ports and sit on top) never intercept a track connect click.
     for (var i = state.placements.length - 1; i >= 0; i--) {
       final p = state.placements[i];
+      if (!onActiveLayer(p)) continue;
       final def = _def(p.blockId);
       if (def == null) continue;
       for (var j = 0; j < def.ports.length; j++) {
