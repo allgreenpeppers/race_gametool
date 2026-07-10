@@ -1277,7 +1277,7 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
   /// convex tile set (concave corners unlock inward notches).
   void generateIsland() {
     _saveToHistory();
-    final mask = _ensureGrassMask();
+    final mask = _generateDefaultGrassMask();
     _autotileGrassMask(mask);
   }
 
@@ -1380,6 +1380,10 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
     if (state.islandGrassMask != null) {
       return state.islandGrassMask!;
     }
+    return _generateDefaultGrassMask();
+  }
+
+  Set<(int, int)> _generateDefaultGrassMask() {
     // Generate default from track footprint
     final footprint = <(int, int)>{};
     for (final p in state.placements) {
