@@ -5,6 +5,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/constants.dart';
+import '../logic/island_generator.dart';
+import '../logic/island_tiles.dart';
 import '../logic/track_topology.dart';
 import '../models/block_def.dart';
 import '../models/map_scene.dart';
@@ -1079,6 +1081,77 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
 
   void clearSpawn() =>
       state = state.copyWith(spawn: () => null, statusMessage: () => 'Spawn cleared');
+
+  // --- Auto island generation ------------------------------------------------
+
+  /// Island tile ids grouped by their 8-direction signature key.
+  Map<String, List<String>> _islandTilesBySignature() {
+    final map = <String, List<String>>{};
+    for (final def in ref.read(assetLibraryProvider).blocks) {
+      if (def.category != BlockCategory.islandTile) continue;
+      final key = sigKey(def.ports.map((p) => p.direction).toSet());
+      map.putIfAbsent(key, () => []).add(def.id);
+    }
+    return map;
+  }
+
+  /// Grows an island around the track and autotiles it onto the island
+  /// layer, replacing any existing island placements. Requires the full
+  /// convex tile set (concave corners unlock inward notches).
+  void generateIsland() {
+    final tiles = _islandTilesBySignature();
+    final missingConvex = [
+      for (final s in convexSetSignatures)
+        if (!tiles.containsKey(sigKey(s))) islandKindLabel(s),
+    ];
+    if (missingConvex.isNotEmpty) {
+      state = state.copyWith(
+          statusMessage: () =>
+              'Cannot generate: missing ${missingConvex.toSet().join(", ")} tile(s)');
+      return;
+    }
+
+    // Track footprint (only the track layer defines the island shape).
+    final footprint = <(int, int)>{};
+    for (final p in state.placements) {
+      if (layerOf(p) != MapLayer.track) continue;
+      final r = rectOf(p);
+      if (r == null) continue;
+      for (var y = r.y; y < r.y + r.h; y++) {
+        for (var x = r.x; x < r.x + r.w; x++) {
+          footprint.add((x, y));
+        }
+      }
+    }
+    if (footprint.isEmpty) {
+      state = state.copyWith(
+          statusMessage: () => 'Place some track first, then generate');
+      return;
+    }
+
+    final grid = dilateRegion(
+      footprint,
+      cols: GridConstants.levelGridCols,
+      rows: GridConstants.levelGridRows,
+      padding: GridConstants.islandPaddingCells,
+    );
+    final result = autotileIsland(grid: grid, tileIdsBySignature: tiles);
+
+    // Replace island-layer placements, keep everything else.
+    final kept = [
+      for (final p in state.placements)
+        if (layerOf(p) != MapLayer.island) p,
+    ];
+    state = state.copyWith(
+      placements: [...kept, ...result.placements],
+      selection: const {},
+      selectedPlacementIndex: () => null,
+      statusMessage: () => result.unmatched == 0
+          ? 'Generated ${result.placements.length} island tiles'
+          : 'Generated ${result.placements.length} tiles; ${result.unmatched} '
+              'cell(s) unmatched (add concave corners for notches)',
+    );
+  }
 
   void setMapName(String name) => state = state.copyWith(mapName: name);
 

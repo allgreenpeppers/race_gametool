@@ -295,6 +295,12 @@ class _Toolbar extends StatelessWidget {
                     ),
                   ],
                 ),
+              if (state.activeLayer == MapLayer.island)
+                FilledButton.tonalIcon(
+                  onPressed: notifier.generateIsland,
+                  icon: const Icon(Icons.grass, size: 18),
+                  label: const Text('Generate Island'),
+                ),
               OutlinedButton.icon(
                 onPressed: state.placements.isEmpty ? null : notifier.clearAll,
                 icon: const Icon(Icons.clear_all, size: 18),

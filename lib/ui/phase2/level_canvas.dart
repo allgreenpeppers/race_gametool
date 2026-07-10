@@ -138,12 +138,17 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
         state.tool == LevelTool.erase ||
         state.tool == LevelTool.multi;
 
+    // The island layer is autotiled, not wired by ports: no connect "+",
+    // no insert seams, no port glyphs there.
+    final portsEnabled = state.activeLayer != MapLayer.island;
+
     // Occupancy for drawing "+" on free ports in Connect mode.
-    final occupied =
-        state.tool == LevelTool.connect ? notifier.occupiedCells() : null;
+    final occupied = state.tool == LevelTool.connect && portsEnabled
+        ? notifier.occupiedCells()
+        : null;
 
     // Seam markers for the Insert tool.
-    final insertMarkers = state.tool == LevelTool.insert
+    final insertMarkers = state.tool == LevelTool.insert && portsEnabled
         ? notifier.insertSeamBoundaryCells()
         : null;
 
@@ -159,6 +164,10 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
         case LevelTool.multi:
           notifier.selectSingleAt(x, y);
         case LevelTool.insert:
+          if (!portsEnabled) {
+            notifier.setStatus('Island layer is auto-generated, not wired');
+            break;
+          }
           final seam = notifier.insertSeamAt(x, y);
           if (seam != null) {
             notifier.insertStraightAtSeam(seam);
@@ -168,6 +177,11 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
         case LevelTool.spawn:
           notifier.setSpawnAt(x, y);
         case LevelTool.connect:
+          if (!portsEnabled) {
+            notifier.setStatus(
+                'Island layer uses Generate Island, not port connect');
+            break;
+          }
           // While a straight-extension preview is active, a tap picks how
           // many tiles to place (ghost N -> place N), or cancels.
           if (state.extendPreview != null) {
@@ -505,7 +519,11 @@ class _LevelPainter extends CustomPainter {
       );
     }
 
-    _paintPorts(canvas, def, p.gridX, p.gridY);
+    // Island tiles are autotiled, not port-wired: their 8-direction ports
+    // are not shown on the canvas.
+    if (def.category != BlockCategory.islandTile) {
+      _paintPorts(canvas, def, p.gridX, p.gridY);
+    }
   }
 
   void _paintPorts(
