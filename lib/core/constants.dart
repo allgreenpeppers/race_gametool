@@ -17,4 +17,10 @@ class GridConstants {
   /// How far the island footprint expands beyond the track bounds
   /// before smoothing (Phase 2 island generation).
   static const int islandPaddingCells = 4;
+
+  /// Phase 2 level canvas size in grid cells. Large enough that a full
+  /// track built outward from the centre does not hit the boundary during
+  /// normal editing (auto-extend, connect, etc.).
+  static const int levelGridCols = 320;
+  static const int levelGridRows = 240;
 }

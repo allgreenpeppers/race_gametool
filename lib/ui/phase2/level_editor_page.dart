@@ -1,18 +1,18 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../logic/asset_bundle.dart';
 import '../../state/app_providers.dart';
+import '../../state/level_editor_providers.dart';
 import '../widgets/block_thumbnail.dart';
+import 'diagnostics_panel.dart';
+import 'level_canvas.dart';
 
-/// Phase 2: load a .rgpack asset bundle into a palette, stamp blocks on
-/// an InteractiveViewer grid, route straight and diagonal segments between
-/// ports, generate the island terrain, and export the map scene.
-///
-/// This page currently loads a shared bundle and shows the block palette
-/// with rendered thumbnails. Placement, routing, and island generation
-/// arrive in later steps.
+/// Phase 2: load a .rgpack bundle into a palette, stamp blocks on the grid
+/// canvas, then (in later steps) route ports, generate the island, and
+/// export the map scene.
 class LevelEditorPage extends ConsumerWidget {
   const LevelEditorPage({super.key});
 
@@ -37,10 +37,73 @@ class LevelEditorPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final library = ref.watch(assetLibraryProvider);
+    final state = ref.watch(levelEditorProvider);
+    final notifier = ref.read(levelEditorProvider.notifier);
 
     return Row(
       children: [
-        SizedBox(
+        _Palette(
+          onImport: () => _importBundle(ref),
+          selectedId: state.selectedPaletteId,
+          onSelect: notifier.selectPalette,
+        ),
+        const VerticalDivider(width: 1),
+        Expanded(
+          child: Column(
+            children: [
+              _Toolbar(state: state, notifier: notifier),
+              const Divider(height: 1),
+              Expanded(
+                child: library.isEmpty
+                    ? Center(
+                        child: Text(
+                          'Import a .rgpack bundle to start building a level',
+                          style: theme.textTheme.bodyLarge,
+                        ),
+                      )
+                    : Focus(
+                        autofocus: true,
+                        onKeyEvent: (node, event) {
+                          if (event is KeyDownEvent &&
+                              (event.logicalKey ==
+                                      LogicalKeyboardKey.delete ||
+                                  event.logicalKey ==
+                                      LogicalKeyboardKey.backspace)) {
+                            notifier.deleteSelected();
+                            return KeyEventResult.handled;
+                          }
+                          return KeyEventResult.ignored;
+                        },
+                        child: const LevelCanvas(),
+                      ),
+              ),
+              if (library.isNotEmpty) const DiagnosticsPanel(),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _Palette extends StatelessWidget {
+  const _Palette({
+    required this.onImport,
+    required this.selectedId,
+    required this.onSelect,
+  });
+
+  final VoidCallback onImport;
+  final String? selectedId;
+  final void Function(String id) onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer(
+      builder: (context, ref, _) {
+        final library = ref.watch(assetLibraryProvider);
+        final theme = Theme.of(context);
+        return SizedBox(
           width: 240,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -56,7 +119,7 @@ class LevelEditorPage extends ConsumerWidget {
                     IconButton(
                       tooltip: 'Import bundle (.rgpack)',
                       icon: const Icon(Icons.folder_open),
-                      onPressed: () => _importBundle(ref),
+                      onPressed: onImport,
                     ),
                   ],
                 ),
@@ -84,8 +147,13 @@ class LevelEditorPage extends ConsumerWidget {
                         itemCount: library.blocks.length,
                         itemBuilder: (context, index) {
                           final block = library.blocks[index];
+                          final selected = block.id == selectedId;
                           return ListTile(
                             dense: true,
+                            selected: selected,
+                            selectedTileColor: theme
+                                .colorScheme.primaryContainer
+                                .withValues(alpha: 0.4),
                             leading: SizedBox(
                               width: 40,
                               height: 40,
@@ -99,32 +167,73 @@ class LevelEditorPage extends ConsumerWidget {
                             title: Text(block.id),
                             subtitle: Text(
                                 '${block.boundingBox.width} x '
-                                '${block.boundingBox.height} cells, '
+                                '${block.boundingBox.height}, '
                                 '${block.ports.length} ports'),
+                            onTap: () => onSelect(block.id),
                           );
                         },
                       ),
               ),
             ],
           ),
-        ),
-        const VerticalDivider(width: 1),
-        Expanded(
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.grid_on_outlined,
-                    size: 64, color: theme.colorScheme.outline),
-                const SizedBox(height: 12),
-                Text(
-                    'Grid canvas (InteractiveViewer) arrives in a later step',
-                    style: theme.textTheme.bodyLarge),
-              ],
+        );
+      },
+    );
+  }
+}
+
+class _Toolbar extends StatelessWidget {
+  const _Toolbar({required this.state, required this.notifier});
+
+  final LevelEditorState state;
+  final LevelEditorNotifier notifier;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          SegmentedButton<LevelTool>(
+            showSelectedIcon: false,
+            segments: [
+              for (final tool in LevelTool.values)
+                ButtonSegment(
+                  value: tool,
+                  label: Text(tool.label),
+                  icon: Icon(switch (tool) {
+                    LevelTool.select => Icons.near_me_outlined,
+                    LevelTool.multi => Icons.select_all,
+                    LevelTool.stamp => Icons.add_box_outlined,
+                    LevelTool.connect => Icons.hub_outlined,
+                    LevelTool.erase => Icons.delete_outline,
+                  }),
+                ),
+            ],
+            selected: {state.tool},
+            onSelectionChanged: (s) => notifier.setTool(s.first),
+          ),
+          const SizedBox(width: 16),
+          Text('${state.placements.length} placed',
+              style: theme.textTheme.labelMedium),
+          const SizedBox(width: 16),
+          OutlinedButton.icon(
+            onPressed:
+                state.placements.isEmpty ? null : notifier.clearAll,
+            icon: const Icon(Icons.clear_all, size: 18),
+            label: const Text('Clear'),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Text(
+              state.statusMessage ?? '',
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall,
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
