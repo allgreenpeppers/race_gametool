@@ -113,13 +113,17 @@ class InspectorPanel extends ConsumerWidget {
       'Other',
     ];
     Widget statusChip(String label, bool ready) => Row(
-          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(ready ? Icons.check_circle : Icons.cancel,
-                size: 15,
-                color: ready ? Colors.greenAccent : theme.colorScheme.outline),
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: Icon(ready ? Icons.check_circle : Icons.cancel,
+                  size: 15,
+                  color:
+                      ready ? Colors.greenAccent : theme.colorScheme.outline),
+            ),
             const SizedBox(width: 4),
-            Text(label, style: theme.textTheme.bodySmall),
+            Expanded(child: Text(label, style: theme.textTheme.bodySmall)),
           ],
         );
 
