@@ -744,6 +744,7 @@ class _LevelPainter extends CustomPainter {
         CellRect(hx, hy, def.boundingBox.width, def.boundingBox.height);
     var blocked = false;
     for (final p in placements) {
+      if (_layerOf(p) != activeLayer) continue;
       final r = rectOf(p);
       if (r != null && candidate.overlaps(r)) {
         blocked = true;
