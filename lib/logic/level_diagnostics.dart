@@ -67,6 +67,11 @@ List<LevelDiagnostic> validateLevel(
     final r = CellRect(placements[i].gridX, placements[i].gridY,
         def.boundingBox.width, def.boundingBox.height);
     rects.add(r);
+    // Only track pieces participate in port-connection diagnostics; island
+    // tiles (autotiled) and decorations are not port-wired, and they may
+    // share cells with track since layers overlap. Keeping only track cells
+    // in the owner map avoids cross-layer false positives.
+    if (def.category != BlockCategory.track) continue;
     for (var y = r.y; y < r.y + r.h; y++) {
       for (var x = r.x; x < r.x + r.w; x++) {
         owner[(x, y)] = i;
@@ -77,6 +82,8 @@ List<LevelDiagnostic> validateLevel(
   for (var i = 0; i < placements.length; i++) {
     final def = defOf(placements[i].blockId);
     if (def == null) continue;
+    // Port-connection checks only apply to track pieces.
+    if (def.category != BlockCategory.track) continue;
     final p = placements[i];
 
     for (var pi = 0; pi < def.ports.length; pi++) {

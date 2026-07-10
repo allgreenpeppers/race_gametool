@@ -98,6 +98,35 @@ void main() {
         reason: 'span 4 facing span 5 should error');
   });
 
+  test('island tiles are excluded from port diagnostics', () {
+    // An island tile with 8-direction ports would otherwise flood the panel
+    // with "not connected" warnings.
+    final islandTile = BlockDef(
+      id: 'grass',
+      boundingBox: const BoundingBox(width: 1, height: 1),
+      spriteSheetRect: const SpriteSheetRect(x: 0, y: 0, w: 16, h: 16),
+      category: BlockCategory.islandTile,
+      ports: const [
+        Port(localGridX: 0, localGridY: 0, direction: PortDirection.up),
+        Port(localGridX: 0, localGridY: 0, direction: PortDirection.diagUR),
+      ],
+    );
+    // A track piece sitting on the same cells (layers overlap) must not be
+    // reported as connecting to the island tile.
+    final track = _straight('road', w: 3, span: 1);
+    final diags = validateLevel(
+      const [
+        BlockPlacement(blockId: 'grass', gridX: 0, gridY: 0),
+        BlockPlacement(blockId: 'road', gridX: 0, gridY: 0),
+      ],
+      libOf([islandTile, track]),
+    );
+    // Only the road's two free end ports warn; the island tile is ignored,
+    // and the overlapping island cell does not corrupt the road's checks.
+    expect(diags.where((d) => d.severity == DiagnosticSeverity.error), isEmpty);
+    expect(diags.every((d) => d.message.startsWith('road')), isTrue);
+  });
+
   test('unknown block id is an error', () {
     final diags = validateLevel(
       const [BlockPlacement(blockId: 'ghost', gridX: 0, gridY: 0)],
