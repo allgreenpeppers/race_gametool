@@ -11,6 +11,7 @@ import '../core/constants.dart';
 import '../logic/asset_bundle.dart';
 import '../logic/port_placement.dart';
 import '../models/block_def.dart';
+import '../models/geometry.dart';
 import '../models/mask_draft.dart';
 import '../models/port.dart';
 import 'app_providers.dart';
@@ -21,7 +22,8 @@ enum Phase1Tool {
   move('Move'),
   drawBox('Draw Box'),
   paintMask('Paint Mask'),
-  addPort('Add Port');
+  addPort('Add Port'),
+  drawPhysicsArea('Draw Physics Area');
 
   const Phase1Tool(this.label);
   final String label;
@@ -83,6 +85,11 @@ class AssetDefinerState {
     this.statusMessage,
     this.isDirty = false,
     this.currentFilePath,
+    this.selectedVertexIndex,
+    this.snapToGrid = true,
+    this.physicsAreaHoverPos,
+    this.curveMode = false,
+    this.curveDraftPoints = const [],
   });
 
   /// One source image per single-image category (track, island, ...). The
@@ -126,6 +133,21 @@ class AssetDefinerState {
 
   final bool isDirty;
   final String? currentFilePath;
+
+  /// Currently selected vertex index for physicsTrackArea editing.
+  final int? selectedVertexIndex;
+
+  /// Whether physicsTrackArea vertices snap to the 16px grid.
+  final bool snapToGrid;
+
+  /// Temporary hover position for drawing physics area (virtual preview line).
+  final ui.Offset? physicsAreaHoverPos;
+
+  /// Whether curve mode is active for physicsTrackArea editing.
+  final bool curveMode;
+
+  /// Draft points currently placed for the arc curve (up to 2 points: center, start).
+  final List<Vec2> curveDraftPoints;
 
   // --- Active-category views (keep the rest of the editor unchanged) --------
 
@@ -194,6 +216,11 @@ class AssetDefinerState {
     String? Function()? statusMessage,
     bool? isDirty,
     String? Function()? currentFilePath,
+    int? Function()? selectedVertexIndex,
+    bool? snapToGrid,
+    ui.Offset? Function()? physicsAreaHoverPos,
+    bool? curveMode,
+    List<Vec2>? curveDraftPoints,
   }) {
     final category = activeCategory ?? this.activeCategory;
     final decIndex = activeDecorationIndex ?? this.activeDecorationIndex;
@@ -229,6 +256,15 @@ class AssetDefinerState {
       isDirty: isDirty ?? this.isDirty,
       currentFilePath:
           currentFilePath != null ? currentFilePath() : this.currentFilePath,
+      selectedVertexIndex: selectedVertexIndex != null
+          ? selectedVertexIndex()
+          : this.selectedVertexIndex,
+      snapToGrid: snapToGrid ?? this.snapToGrid,
+      physicsAreaHoverPos: physicsAreaHoverPos != null
+          ? physicsAreaHoverPos()
+          : this.physicsAreaHoverPos,
+      curveMode: curveMode ?? this.curveMode,
+      curveDraftPoints: curveDraftPoints ?? this.curveDraftPoints,
     );
   }
 }
@@ -237,6 +273,8 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
   int _nextBlockNumber = 1;
   ({int x, int y})? _dragAnchor;
   Cell? _lastPaintCell;
+
+  bool _isDraggingVertex = false;
 
   @override
   AssetDefinerState build() => const AssetDefinerState();
@@ -248,6 +286,10 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       dragPreview: () => null,
       paintPreview: () => null,
       movePreview: () => null,
+      selectedVertexIndex: () => null,
+      physicsAreaHoverPos: () => null,
+      curveMode: false,
+      curveDraftPoints: const [],
       tool: category == BlockCategory.islandTile ? Phase1Tool.drawBox : state.tool,
       statusMessage: () => 'Editing ${category.jsonValue}',
     );
@@ -311,6 +353,10 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
         dragPreview: () => null,
         paintPreview: () => null,
         movePreview: () => null,
+        selectedVertexIndex: () => null,
+        physicsAreaHoverPos: () => null,
+        curveMode: false,
+        curveDraftPoints: const [],
         isDirty: true,
         statusMessage: () => statusMessage,
       );
@@ -321,6 +367,10 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
         dragPreview: () => null,
         paintPreview: () => null,
         movePreview: () => null,
+        selectedVertexIndex: () => null,
+        physicsAreaHoverPos: () => null,
+        curveMode: false,
+        curveDraftPoints: const [],
         isDirty: true,
         statusMessage: () => statusMessage,
       );
@@ -349,6 +399,10 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       dragPreview: () => null,
       paintPreview: () => null,
       movePreview: () => null,
+      selectedVertexIndex: () => null,
+      physicsAreaHoverPos: () => null,
+      curveMode: false,
+      curveDraftPoints: const [],
       isDirty: true,
       statusMessage: () => 'Added decoration image $name',
     );
@@ -363,6 +417,10 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       dragPreview: () => null,
       paintPreview: () => null,
       movePreview: () => null,
+      selectedVertexIndex: () => null,
+      physicsAreaHoverPos: () => null,
+      curveMode: false,
+      curveDraftPoints: const [],
       statusMessage: () => 'Editing ${state.decorationSources[index].name}',
     );
   }
@@ -383,6 +441,10 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       dragPreview: () => null,
       paintPreview: () => null,
       movePreview: () => null,
+      selectedVertexIndex: () => null,
+      physicsAreaHoverPos: () => null,
+      curveMode: false,
+      curveDraftPoints: const [],
       isDirty: true,
       statusMessage: () => 'Removed decoration image',
     );
@@ -394,8 +456,13 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       dragPreview: () => null,
       paintPreview: () => null,
       movePreview: () => null,
+      selectedVertexIndex: () => null,
+      physicsAreaHoverPos: () => null,
+      curveMode: false,
+      curveDraftPoints: const [],
     );
     _dragAnchor = null;
+    _isDraggingVertex = false;
   }
 
   /// Grid dimensions of the current image in whole cells.
@@ -426,6 +493,8 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
         _startMove(cellX, cellY);
       case Phase1Tool.select:
         break;
+      case Phase1Tool.drawPhysicsArea:
+        break;
     }
   }
 
@@ -448,6 +517,8 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
             paintPreview: () =>
                 {...cells, ..._lineCells(from, (cellX, cellY))});
       case Phase1Tool.select:
+        break;
+      case Phase1Tool.drawPhysicsArea:
         break;
     }
   }
@@ -524,6 +595,8 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
         _commitMove();
       case Phase1Tool.select:
         break;
+      case Phase1Tool.drawPhysicsArea:
+        break;
     }
   }
 
@@ -548,6 +621,8 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
         }
         break;
       case Phase1Tool.paintMask:
+        break;
+      case Phase1Tool.drawPhysicsArea:
         break;
     }
   }
@@ -717,16 +792,34 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
 
   /// Direct selection from the block list, independent of the active tool.
   void selectMask(int? index) =>
-      state = state.copyWith(selectedIndex: () => index);
+      state = state.copyWith(
+        selectedIndex: () => index,
+        selectedVertexIndex: () => null,
+        physicsAreaHoverPos: () => null,
+        curveMode: false,
+        curveDraftPoints: const [],
+      );
 
   void _selectAt(int cellX, int cellY) {
     for (var i = state.masks.length - 1; i >= 0; i--) {
       if (state.masks[i].containsCell(cellX, cellY)) {
-        state = state.copyWith(selectedIndex: () => i);
+        state = state.copyWith(
+          selectedIndex: () => i,
+          selectedVertexIndex: () => null,
+          physicsAreaHoverPos: () => null,
+          curveMode: false,
+          curveDraftPoints: const [],
+        );
         return;
       }
     }
-    state = state.copyWith(selectedIndex: () => null);
+    state = state.copyWith(
+      selectedIndex: () => null,
+      selectedVertexIndex: () => null,
+      physicsAreaHoverPos: () => null,
+      curveMode: false,
+      curveDraftPoints: const [],
+    );
   }
 
   void renameMask(int index, String id) =>
@@ -1104,8 +1197,435 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
     }
     return duplicates.toList();
   }
+
+  void selectVertex(int? index) {
+    state = state.copyWith(selectedVertexIndex: () => index);
+  }
+
+  void setSnapToGrid(bool value) {
+    state = state.copyWith(snapToGrid: value);
+  }
+
+  void toggleCurveMode() {
+    state = state.copyWith(
+      curveMode: !state.curveMode,
+      curveDraftPoints: const [],
+    );
+  }
+
+  void updatePhysicsAreaHover(ui.Offset? localPos) {
+    state = state.copyWith(physicsAreaHoverPos: () => localPos);
+  }
+
+  double _snapCoord(double val) {
+    if (!state.snapToGrid) return val.roundToDouble();
+    final halfCell = GridConstants.cellSize / 2.0;
+    final near = (val / halfCell).round() * halfCell;
+    if ((val - near).abs() < 4.0) {
+      return near;
+    }
+    return val.roundToDouble();
+  }
+
+  void trackAreaDragStart(ui.Offset localPos) {
+    final maskIndex = state.selectedIndex;
+    if (maskIndex == null) return;
+    final mask = state.masks[maskIndex];
+    final originX = mask.gridX * GridConstants.cellSize;
+    final originY = mask.gridY * GridConstants.cellSize;
+    final lx = localPos.dx - originX;
+    final ly = localPos.dy - originY;
+
+    final vertices = mask.physicsTrackArea;
+    int? clickedIdx;
+    const hitRadius = 8.0;
+    for (var i = 0; i < vertices.length; i++) {
+      final v = vertices[i];
+      final dist = math.sqrt((v.x - lx) * (v.x - lx) + (v.y - ly) * (v.y - ly));
+      if (dist <= hitRadius) {
+        clickedIdx = i;
+        break;
+      }
+    }
+
+    if (clickedIdx != null) {
+      _isDraggingVertex = true;
+      state = state.copyWith(
+        selectedVertexIndex: () => clickedIdx,
+      );
+    } else {
+      _isDraggingVertex = false;
+    }
+  }
+
+  void trackAreaDragUpdate(ui.Offset localPos) {
+    final maskIndex = state.selectedIndex;
+    final vertexIndex = state.selectedVertexIndex;
+    if (maskIndex == null || vertexIndex == null || !_isDraggingVertex) return;
+
+    final mask = state.masks[maskIndex];
+    final originX = mask.gridX * GridConstants.cellSize;
+    final originY = mask.gridY * GridConstants.cellSize;
+    final lx = (localPos.dx - originX).clamp(0.0, mask.widthCells * GridConstants.cellSize);
+    final ly = (localPos.dy - originY).clamp(0.0, mask.heightCells * GridConstants.cellSize);
+
+    final snappedX = _snapCoord(lx);
+    final snappedY = _snapCoord(ly);
+
+    final newVertices = [...mask.physicsTrackArea];
+    if (vertexIndex >= 0 && vertexIndex < newVertices.length) {
+      newVertices[vertexIndex] = Vec2(snappedX, snappedY);
+      final updated = mask.copyWith(physicsTrackArea: newVertices);
+      _updateMask(maskIndex, updated);
+    }
+  }
+
+  void trackAreaDragEnd() {
+    _isDraggingVertex = false;
+  }
+
+  List<Vec2> _generateArc(Vec2 center, Vec2 start, Vec2 end, int widthCells, int heightCells) {
+    final double r = math.sqrt((start.x - center.x) * (start.x - center.x) +
+        (start.y - center.y) * (start.y - center.y));
+    if (r == 0) return [start];
+
+    final double thetaA = math.atan2(start.y - center.y, start.x - center.x);
+    final double thetaB = math.atan2(end.y - center.y, end.x - center.x);
+
+    const int steps = 12;
+    final double w = widthCells * GridConstants.cellSize;
+    final double h = heightCells * GridConstants.cellSize;
+
+    // Path 1: Counter-clockwise (increasing angle)
+    double angleB1 = thetaB;
+    if (angleB1 < thetaA) angleB1 += 2.0 * math.pi;
+    final points1 = <Vec2>[];
+    for (var i = 0; i <= steps; i++) {
+      final t = thetaA + (angleB1 - thetaA) * (i / steps);
+      points1.add(Vec2(
+        (center.x + r * math.cos(t)).roundToDouble(),
+        (center.y + r * math.sin(t)).roundToDouble(),
+      ));
+    }
+
+    // Path 2: Clockwise (decreasing angle)
+    double angleB2 = thetaB;
+    if (angleB2 > thetaA) angleB2 -= 2.0 * math.pi;
+    final points2 = <Vec2>[];
+    for (var i = 0; i <= steps; i++) {
+      final t = thetaA + (angleB2 - thetaA) * (i / steps);
+      points2.add(Vec2(
+        (center.x + r * math.cos(t)).roundToDouble(),
+        (center.y + r * math.sin(t)).roundToDouble(),
+      ));
+    }
+
+    int countInside(List<Vec2> pts) {
+      var count = 0;
+      for (final p in pts) {
+        if (p.x >= 0.0 && p.x <= w && p.y >= 0.0 && p.y <= h) {
+          count++;
+        }
+      }
+      return count;
+    }
+
+    if (countInside(points1) >= countInside(points2)) {
+      return points1;
+    } else {
+      return points2;
+    }
+  }
+
+  void trackAreaTap(ui.Offset localPos) {
+    // Direct selection on canvas is ONLY allowed when no block is selected yet.
+    if (state.selectedIndex == null) {
+      final cellX = (localPos.dx / GridConstants.cellSize).floor();
+      final cellY = (localPos.dy / GridConstants.cellSize).floor();
+      int? hitIndex;
+      for (var i = state.masks.length - 1; i >= 0; i--) {
+        if (state.masks[i].containsCell(cellX, cellY)) {
+          hitIndex = i;
+          break;
+        }
+      }
+      if (hitIndex != null) {
+        selectMask(hitIndex);
+        return;
+      }
+    }
+
+    final maskIndex = state.selectedIndex;
+    if (maskIndex == null) return;
+    final mask = state.masks[maskIndex];
+    final originX = mask.gridX * GridConstants.cellSize;
+    final originY = mask.gridY * GridConstants.cellSize;
+    final lx = localPos.dx - originX;
+    final ly = localPos.dy - originY;
+
+    // Check if clicked outside bounding box
+    if (lx < -8.0 ||
+        lx > mask.widthCells * GridConstants.cellSize + 8.0 ||
+        ly < -8.0 ||
+        ly > mask.heightCells * GridConstants.cellSize + 8.0) {
+      return;
+    }
+
+    final vertices = mask.physicsTrackArea;
+    int? clickedIdx;
+    const hitRadius = 8.0;
+    for (var i = 0; i < vertices.length; i++) {
+      final v = vertices[i];
+      final dist = math.sqrt((v.x - lx) * (v.x - lx) + (v.y - ly) * (v.y - ly));
+      if (dist <= hitRadius) {
+        clickedIdx = i;
+        break;
+      }
+    }
+
+    if (clickedIdx != null) {
+      if (clickedIdx == 0 && vertices.length >= 3) {
+        closePhysicsArea();
+      } else {
+        state = state.copyWith(selectedVertexIndex: () => clickedIdx);
+      }
+    } else {
+      final snappedX = _snapCoord(lx.clamp(0.0, mask.widthCells * GridConstants.cellSize));
+      final snappedY = _snapCoord(ly.clamp(0.0, mask.heightCells * GridConstants.cellSize));
+      final clickPt = Vec2(snappedX, snappedY);
+
+      if (state.curveMode) {
+        final nextDraft = [...state.curveDraftPoints];
+        if (nextDraft.isEmpty) {
+          nextDraft.add(clickPt);
+          state = state.copyWith(curveDraftPoints: nextDraft);
+        } else if (nextDraft.length == 1) {
+          nextDraft.add(clickPt);
+          state = state.copyWith(curveDraftPoints: nextDraft);
+        } else {
+          final center = nextDraft[0];
+          final start = nextDraft[1];
+          final end = clickPt;
+
+          final arcPoints = _generateArc(center, start, end, mask.widthCells, mask.heightCells);
+
+          final newVertices = [...mask.physicsTrackArea];
+          final currentSelect = state.selectedVertexIndex;
+          if (currentSelect != null && currentSelect >= 0 && currentSelect < newVertices.length) {
+            newVertices.insertAll(currentSelect + 1, arcPoints);
+            state = state.copyWith(
+              selectedVertexIndex: () => currentSelect + arcPoints.length,
+            );
+          } else {
+            newVertices.addAll(arcPoints);
+            state = state.copyWith(
+              selectedVertexIndex: () => newVertices.length - 1,
+            );
+          }
+
+          final updated = mask.copyWith(physicsTrackArea: newVertices);
+          _updateMask(maskIndex, updated);
+          state = state.copyWith(curveDraftPoints: const []);
+        }
+      } else {
+        final newVertices = [...mask.physicsTrackArea];
+        final currentSelect = state.selectedVertexIndex;
+        if (currentSelect != null && currentSelect >= 0 && currentSelect < newVertices.length) {
+          newVertices.insert(currentSelect + 1, clickPt);
+          state = state.copyWith(
+            selectedVertexIndex: () => currentSelect + 1,
+          );
+        } else {
+          newVertices.add(clickPt);
+          state = state.copyWith(
+            selectedVertexIndex: () => newVertices.length - 1,
+          );
+        }
+
+        final updated = mask.copyWith(physicsTrackArea: newVertices);
+        _updateMask(maskIndex, updated);
+      }
+    }
+  }
+
+  void undoPhysicsAreaVertex() {
+    final maskIndex = state.selectedIndex;
+    if (maskIndex == null) return;
+    final mask = state.masks[maskIndex];
+    if (mask.physicsTrackArea.isEmpty) return;
+
+    final newVertices = [...mask.physicsTrackArea]..removeLast();
+    int? nextSelect;
+    if (newVertices.isNotEmpty) {
+      nextSelect = newVertices.length - 1;
+    }
+    state = state.copyWith(
+      selectedVertexIndex: () => nextSelect,
+      curveDraftPoints: const [],
+    );
+    _updateMask(maskIndex, mask.copyWith(physicsTrackArea: newVertices));
+  }
+
+  void clearPhysicsArea() {
+    final maskIndex = state.selectedIndex;
+    if (maskIndex == null) return;
+    final mask = state.masks[maskIndex];
+    state = state.copyWith(
+      selectedVertexIndex: () => null,
+      curveDraftPoints: const [],
+    );
+    _updateMask(maskIndex, mask.copyWith(physicsTrackArea: const []));
+  }
+
+  void closePhysicsArea() {
+    final maskIndex = state.selectedIndex;
+    if (maskIndex == null) return;
+    final mask = state.masks[maskIndex];
+    final vertices = mask.physicsTrackArea;
+    if (vertices.isNotEmpty && (vertices.length < 3 || !isSimplePolygon(vertices))) {
+      state = state.copyWith(
+        statusMessage: () => 'Invalid area! Polygon has self-intersections or too few vertices.',
+      );
+      return;
+    }
+    state = state.copyWith(
+      selectedIndex: () => null,
+      selectedVertexIndex: () => null,
+      physicsAreaHoverPos: () => null,
+      curveDraftPoints: const [],
+    );
+  }
+
+  void cancelPhysicsArea() {
+    final maskIndex = state.selectedIndex;
+    if (maskIndex != null) {
+      final mask = state.masks[maskIndex];
+      _updateMask(maskIndex, mask.copyWith(physicsTrackArea: const []));
+    }
+    state = state.copyWith(
+      selectedIndex: () => null,
+      selectedVertexIndex: () => null,
+      physicsAreaHoverPos: () => null,
+      curveDraftPoints: const [],
+    );
+  }
+
+  void resetPhysicsAreaToBoundingBox() {
+    final maskIndex = state.selectedIndex;
+    if (maskIndex == null) return;
+    final mask = state.masks[maskIndex];
+    final w = mask.widthCells * GridConstants.cellSize;
+    final h = mask.heightCells * GridConstants.cellSize;
+
+    final newVertices = [
+      const Vec2(0, 0),
+      Vec2(w, 0),
+      Vec2(w, h),
+      Vec2(0, h),
+    ];
+
+    state = state.copyWith(
+      selectedVertexIndex: () => null,
+      curveDraftPoints: const [],
+    );
+    _updateMask(maskIndex, mask.copyWith(physicsTrackArea: newVertices));
+  }
+
+  void removePhysicsAreaVertex(int vertexIndex) {
+    final maskIndex = state.selectedIndex;
+    if (maskIndex == null) return;
+    final mask = state.masks[maskIndex];
+    if (vertexIndex < 0 || vertexIndex >= mask.physicsTrackArea.length) return;
+    final newVertices = [...mask.physicsTrackArea]..removeAt(vertexIndex);
+    state = state.copyWith(
+      selectedVertexIndex: () => null,
+      curveDraftPoints: const [],
+    );
+    _updateMask(maskIndex, mask.copyWith(physicsTrackArea: newVertices));
+  }
 }
 
 final assetDefinerProvider =
     NotifierProvider<AssetDefinerNotifier, AssetDefinerState>(
         AssetDefinerNotifier.new);
+
+bool isSimplePolygon(List<Vec2> vertices) {
+  if (vertices.isEmpty) return true;
+  if (vertices.length < 3) return false;
+
+  final n = vertices.length;
+  for (var i = 0; i < n; i++) {
+    final p1 = vertices[i];
+    final q1 = vertices[(i + 1) % n];
+
+    for (var j = i + 1; j < n; j++) {
+      final p2 = vertices[j];
+      final q2 = vertices[(j + 1) % n];
+
+      if (_segmentsIntersect(p1, q1, p2, q2)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool _segmentsIntersect(Vec2 p1, Vec2 q1, Vec2 p2, Vec2 q2) {
+  final bool sharesVertex = (p1 == p2 || p1 == q2 || q1 == p2 || q1 == q2);
+
+  int o1 = _orientation(p1, q1, p2);
+  int o2 = _orientation(p1, q1, q2);
+  int o3 = _orientation(p2, q2, p1);
+  int o4 = _orientation(p2, q2, q1);
+
+  if (o1 != o2 && o3 != o4) {
+    if (sharesVertex) {
+      return false;
+    }
+    return true;
+  }
+
+  if (sharesVertex) {
+    if (q1 == p2) {
+      if (o3 == 0 && _onSegmentExclusive(p2, p1, q2)) return true;
+      if (o2 == 0 && _onSegmentExclusive(p1, q2, q1)) return true;
+    } else if (p1 == p2) {
+      if (o4 == 0 && _onSegmentExclusive(p2, q1, q2)) return true;
+      if (o2 == 0 && _onSegmentExclusive(p1, q2, q1)) return true;
+    } else if (q1 == q2) {
+      if (o3 == 0 && _onSegmentExclusive(p2, p1, q2)) return true;
+      if (o1 == 0 && _onSegmentExclusive(p1, p2, q1)) return true;
+    } else if (p1 == q2) {
+      if (o4 == 0 && _onSegmentExclusive(p2, q1, q2)) return true;
+      if (o1 == 0 && _onSegmentExclusive(p1, p2, q1)) return true;
+    }
+    return false;
+  }
+
+  if (o1 == 0 && _onSegment(p1, p2, q1)) return true;
+  if (o2 == 0 && _onSegment(p1, q2, q1)) return true;
+  if (o3 == 0 && _onSegment(p2, p1, q2)) return true;
+  if (o4 == 0 && _onSegment(p2, q1, q2)) return true;
+
+  return false;
+}
+
+int _orientation(Vec2 p, Vec2 q, Vec2 r) {
+  final val = (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
+  if (val == 0) return 0;
+  return (val > 0) ? 1 : 2;
+}
+
+bool _onSegment(Vec2 p, Vec2 r, Vec2 q) {
+  if (r.x <= math.max(p.x, q.x) && r.x >= math.min(p.x, q.x) &&
+      r.y <= math.max(p.y, q.y) && r.y >= math.min(p.y, q.y)) {
+    return true;
+  }
+  return false;
+}
+
+bool _onSegmentExclusive(Vec2 p, Vec2 r, Vec2 q) {
+  if (r == p || r == q) return false;
+  return r.x <= math.max(p.x, q.x) && r.x >= math.min(p.x, q.x) &&
+      r.y <= math.max(p.y, q.y) && r.y >= math.min(p.y, q.y);
+}

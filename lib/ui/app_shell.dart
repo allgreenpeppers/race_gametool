@@ -870,9 +870,11 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
                                         if ((activeCategory == BlockCategory.track) ||
                                             (activeCategory == BlockCategory.islandTile &&
                                                 t != Phase1Tool.paintMask &&
-                                                t != Phase1Tool.addPort) ||
+                                                t != Phase1Tool.addPort &&
+                                                t != Phase1Tool.drawPhysicsArea) ||
                                             (activeCategory == BlockCategory.decoration &&
-                                                t != Phase1Tool.addPort))
+                                                t != Phase1Tool.addPort &&
+                                                t != Phase1Tool.drawPhysicsArea))
                                           ButtonSegment(
                                             value: t,
                                             tooltip: t.label,
@@ -882,6 +884,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
                                               Phase1Tool.drawBox => Icons.crop_square,
                                               Phase1Tool.paintMask => Icons.brush_outlined,
                                               Phase1Tool.addPort => Icons.adjust,
+                                              Phase1Tool.drawPhysicsArea => Icons.polyline,
                                             }),
                                           ),
                                     ],

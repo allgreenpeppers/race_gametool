@@ -259,8 +259,230 @@ class InspectorPanel extends ConsumerWidget {
             ),
             const Spacer(),
           ] else ...[
+            const Divider(),
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Text('Physics Track Area', style: theme.textTheme.titleSmall),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  const Text('Snap Grid'),
+                  const SizedBox(width: 4),
+                  Switch(
+                    value: state.snapToGrid,
+                    onChanged: (val) => notifier.setSnapToGrid(val),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.undo, size: 16),
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    tooltip: 'Undo last point',
+                    onPressed: mask.physicsTrackArea.isNotEmpty
+                        ? () => notifier.undoPhysicsAreaVertex()
+                        : null,
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.delete_sweep, size: 16),
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    tooltip: 'Clear all points',
+                    onPressed: mask.physicsTrackArea.isNotEmpty
+                        ? () => notifier.clearPhysicsArea()
+                        : null,
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.crop_free, size: 16),
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    tooltip: 'Reset to bounding box',
+                    onPressed: () => notifier.resetPhysicsAreaToBoundingBox(),
+                  ),
+                ],
+              ),
+            ),
+             if (state.tool == Phase1Tool.drawPhysicsArea) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                child: Row(
+                  children: [
+                    const Text('Mode'),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: SegmentedButton<bool>(
+                        showSelectedIcon: false,
+                        style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                        segments: const [
+                          ButtonSegment(
+                            value: false,
+                            label: Text('Line'),
+                            icon: Icon(Icons.horizontal_rule, size: 14),
+                          ),
+                          ButtonSegment(
+                            value: true,
+                            label: Text('Curve'),
+                            icon: Icon(Icons.architecture, size: 14),
+                          ),
+                        ],
+                        selected: {state.curveMode},
+                        onSelectionChanged: (val) {
+                          notifier.toggleCurveMode();
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (state.curveMode) ...[
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.tertiaryContainer,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.info_outline, size: 14, color: theme.colorScheme.onTertiaryContainer),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            state.curveDraftPoints.isEmpty
+                                ? 'Please choose the center of the circle'
+                                : state.curveDraftPoints.length == 1
+                                    ? 'Please choose the start of the curve'
+                                    : 'Please choose the end of the curve',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: theme.colorScheme.onTertiaryContainer,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+              (() {
+                final pts = mask.physicsTrackArea;
+                final isPolygonValid = pts.isEmpty || (pts.length >= 3 && isSimplePolygon(pts));
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (pts.isNotEmpty && !isPolygonValid)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                        child: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.errorContainer,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.error_outline, size: 14, color: theme.colorScheme.onErrorContainer),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  pts.length < 3
+                                      ? 'Need at least 3 points to complete'
+                                      : 'Area crosses itself! Please fix it',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: theme.colorScheme.onErrorContainer,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: theme.colorScheme.primaryContainer,
+                                foregroundColor: theme.colorScheme.onPrimaryContainer,
+                                visualDensity: VisualDensity.compact,
+                                padding: EdgeInsets.zero,
+                              ),
+                              onPressed: isPolygonValid ? () => notifier.closePhysicsArea() : null,
+                              icon: const Icon(Icons.check, size: 14),
+                              label: const Text('Complete', style: TextStyle(fontSize: 11)),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: theme.colorScheme.error,
+                                side: BorderSide(color: theme.colorScheme.error),
+                                visualDensity: VisualDensity.compact,
+                                padding: EdgeInsets.zero,
+                              ),
+                              onPressed: () => notifier.cancelPhysicsArea(),
+                              icon: const Icon(Icons.cancel, size: 14),
+                              label: const Text('Cancel', style: TextStyle(fontSize: 11)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              })(),
+            ],
+            if (mask.physicsTrackArea.isNotEmpty) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                child: Text('Vertices: ${mask.physicsTrackArea.length} points',
+                    style: theme.textTheme.bodySmall),
+              ),
+              SizedBox(
+                height: 40,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  itemCount: mask.physicsTrackArea.length,
+                  itemBuilder: (context, i) {
+                    final isVSelected = state.selectedVertexIndex == i;
+                    final pt = mask.physicsTrackArea[i];
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 6.0),
+                      child: InputChip(
+                        backgroundColor: isVSelected ? theme.colorScheme.secondaryContainer : null,
+                        label: Text('V${i + 1}: (${pt.x.round()}, ${pt.y.round()})',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: isVSelected ? FontWeight.bold : null,
+                            )),
+                        onPressed: () {
+                          // Click chip to select vertex
+                          notifier.selectVertex(i);
+                        },
+                        onDeleted: () => notifier.removePhysicsAreaVertex(i),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+            const Divider(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
               child: Text('Ports (${mask.ports.length})',
                   style: theme.textTheme.titleSmall),
             ),

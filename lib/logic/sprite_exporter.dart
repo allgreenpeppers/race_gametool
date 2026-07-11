@@ -107,6 +107,7 @@ SpriteExportResult buildSpriteExport({
       category: mask.category,
       cornerType: mask.cornerType,
       ports: mask.ports,
+      physicsTrackArea: mask.physicsTrackArea,
     ));
   }
 
@@ -225,6 +226,7 @@ SpriteExportResult buildSpriteExportSources(
       category: mask.category,
       cornerType: mask.cornerType,
       ports: mask.ports,
+      physicsTrackArea: mask.physicsTrackArea,
     ));
   }
 

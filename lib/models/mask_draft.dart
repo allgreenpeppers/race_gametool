@@ -1,4 +1,5 @@
 import 'block_def.dart';
+import 'geometry.dart';
 import 'port.dart';
 
 /// A cell coordinate pair. Records compare structurally, so these work
@@ -25,6 +26,7 @@ class MaskDraft {
     this.ports = const [],
     this.category = BlockCategory.track,
     this.cornerType = CornerType.none,
+    this.physicsTrackArea = const [],
   });
 
   /// Builds a freeform mask from absolute painted cells. The bounding box
@@ -36,6 +38,7 @@ class MaskDraft {
     List<Port> ports = const [],
     BlockCategory category = BlockCategory.track,
     CornerType cornerType = CornerType.none,
+    List<Vec2> physicsTrackArea = const [],
   }) {
     assert(absoluteCells.isNotEmpty);
     var minX = absoluteCells.first.$1;
@@ -63,6 +66,7 @@ class MaskDraft {
       ports: ports,
       category: category,
       cornerType: cornerType,
+      physicsTrackArea: physicsTrackArea,
     );
   }
 
@@ -85,6 +89,9 @@ class MaskDraft {
           .toList(),
       category: BlockCategory.fromJson(json['category'] as String?),
       cornerType: CornerType.fromJson(json['cornerType'] as String?),
+      physicsTrackArea: (json['physicsTrackArea'] as List<dynamic>? ?? [])
+          .map((v) => Vec2.fromJson(v as List<dynamic>))
+          .toList(),
     );
   }
 
@@ -103,6 +110,10 @@ class MaskDraft {
   /// Asset family and (for island corners) convex/concave marking.
   final BlockCategory category;
   final CornerType cornerType;
+
+  /// Local vertices of the asphalt polygon. Inside means normal friction,
+  /// outside means sand or grass friction.
+  final List<Vec2> physicsTrackArea;
 
   bool get isFreeform => cells != null;
 
@@ -123,6 +134,7 @@ class MaskDraft {
         'ports': ports.map((p) => p.toJson()).toList(),
         'category': category.jsonValue,
         'cornerType': cornerType.jsonValue,
+        'physicsTrackArea': physicsTrackArea.map((v) => v.toJson()).toList(),
       };
 
   /// Whether the absolute cell is part of this mask's actual shape.
@@ -157,6 +169,7 @@ class MaskDraft {
     List<Port>? ports,
     BlockCategory? category,
     CornerType? cornerType,
+    List<Vec2>? physicsTrackArea,
   }) =>
       MaskDraft(
         id: id ?? this.id,
@@ -168,5 +181,6 @@ class MaskDraft {
         ports: ports ?? this.ports,
         category: category ?? this.category,
         cornerType: cornerType ?? this.cornerType,
+        physicsTrackArea: physicsTrackArea ?? this.physicsTrackArea,
       );
 }

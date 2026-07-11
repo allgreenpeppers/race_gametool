@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants.dart';
 import '../../models/block_def.dart';
+import '../../models/geometry.dart';
 import '../../models/mask_draft.dart';
 import '../../state/asset_definer_providers.dart';
 import '../widgets/port_marker.dart';
@@ -24,6 +25,7 @@ class MaskCanvas extends ConsumerStatefulWidget {
     Phase1Tool.paintMask,
     Phase1Tool.addPort,
     Phase1Tool.move,
+    Phase1Tool.drawPhysicsArea,
   };
 
   @override
@@ -49,6 +51,32 @@ class _MaskCanvasState extends ConsumerState<MaskCanvas> {
 
   void _onTransformChanged() {
     setState(() {});
+  }
+
+  Offset _getSnappedOffset(Offset raw, double cell, bool snapEnabled) {
+    if (!snapEnabled) {
+      return Offset(raw.dx.roundToDouble(), raw.dy.roundToDouble());
+    }
+    final double halfCell = cell / 2.0; // 8.0
+    double snapX = raw.dx;
+    double snapY = raw.dy;
+    const double threshold = 4.0;
+
+    double nearX = (raw.dx / halfCell).round() * halfCell;
+    double nearY = (raw.dy / halfCell).round() * halfCell;
+
+    if ((raw.dx - nearX).abs() < threshold) {
+      snapX = nearX;
+    } else {
+      snapX = raw.dx.roundToDouble();
+    }
+    if ((raw.dy - nearY).abs() < threshold) {
+      snapY = nearY;
+    } else {
+      snapY = raw.dy.roundToDouble();
+    }
+
+    return Offset(snapX, snapY);
   }
 
   @override
@@ -88,106 +116,167 @@ class _MaskCanvasState extends ConsumerState<MaskCanvas> {
     }
 
     (int, int) toCell(Offset local) => (
-          (local.dx / cell).floor().clamp(0, (image.width / cell).ceil() - 1),
-          (local.dy / cell).floor().clamp(0, (image.height / cell).ceil() - 1),
+          (local.dx / cell).floor().clamp(0, (image.width / cell).ceil() - 1).toInt(),
+          (local.dy / cell).floor().clamp(0, (image.height / cell).ceil() - 1).toInt(),
         );
 
-    return InteractiveViewer(
-      transformationController: _transform,
-      constrained: false,
-      minScale: 0.15,
-      maxScale: 12,
-      boundaryMargin: const EdgeInsets.all(600),
-      // Pan handlers are registered only for the drawing tools; in Select
-      // mode single-pointer drags fall through to InteractiveViewer so the
-      // canvas can be panned with the mouse.
-      child: Listener(
-        onPointerMove: (event) {
-          if (event.buttons == kMiddleMouseButton) {
-            final matrix = _transform.value.clone();
-            matrix.storage[12] += event.delta.dx;
-            matrix.storage[13] += event.delta.dy;
-            _transform.value = matrix;
-          }
-        },
-        onPointerSignal: (event) {
-          if (event is PointerScrollEvent) {
-            final isZoomKey = HardwareKeyboard.instance.isControlPressed ||
-                HardwareKeyboard.instance.isMetaPressed;
-            if (isZoomKey) {
-              final double dy = event.scrollDelta.dy;
-              if (dy != 0) {
-                final double scaleDelta = dy > 0 ? 0.9 : 1.1;
-                final matrix = _transform.value.clone();
-                final double tx = matrix.storage[12];
-                final double ty = matrix.storage[13];
-                final double currentScale = matrix.getMaxScaleOnAxis();
-                const minScale = 0.15;
-                const maxScale = 12.0;
-                final double newScale = (currentScale * scaleDelta).clamp(minScale, maxScale);
-                final double actualFactor = newScale / currentScale;
-                if (actualFactor != 1.0) {
-                  final px = event.localPosition.dx;
-                  final py = event.localPosition.dy;
-                  matrix.storage[0] *= actualFactor;
-                  matrix.storage[5] *= actualFactor;
-                  matrix.storage[10] *= actualFactor;
-                  matrix.storage[12] = px + (tx - px) * actualFactor;
-                  matrix.storage[13] = py + (ty - py) * actualFactor;
-                  _transform.value = matrix;
-                }
-              }
-            } else {
-              final matrix = _transform.value.clone();
-              matrix.storage[12] -= event.scrollDelta.dx;
-              matrix.storage[13] -= event.scrollDelta.dy;
-              _transform.value = matrix;
+    return Focus(
+      autofocus: true,
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent) {
+          if (state.tool == Phase1Tool.drawPhysicsArea) {
+            final isCmdZ = event.logicalKey == LogicalKeyboardKey.keyZ &&
+                (HardwareKeyboard.instance.isMetaPressed || HardwareKeyboard.instance.isControlPressed);
+            if (isCmdZ) {
+              notifier.undoPhysicsAreaVertex();
+              return KeyEventResult.handled;
+            } else if (event.logicalKey == LogicalKeyboardKey.enter) {
+              notifier.closePhysicsArea();
+              return KeyEventResult.handled;
+            } else if (event.logicalKey == LogicalKeyboardKey.backspace ||
+                event.logicalKey == LogicalKeyboardKey.delete) {
+              notifier.undoPhysicsAreaVertex();
+              return KeyEventResult.handled;
+            } else if (event.logicalKey == LogicalKeyboardKey.escape) {
+              notifier.clearPhysicsArea();
+              return KeyEventResult.handled;
             }
           }
-        },
-        child: RawGestureDetector(
-          gestures: {
-            if (usesDrag)
-              LeftClickPanGestureRecognizer: GestureRecognizerFactoryWithHandlers<LeftClickPanGestureRecognizer>(
-                () => LeftClickPanGestureRecognizer(
+        }
+        return KeyEventResult.ignored;
+      },
+      child: InteractiveViewer(
+        transformationController: _transform,
+        constrained: false,
+        minScale: 0.15,
+        maxScale: 12,
+        boundaryMargin: const EdgeInsets.all(600),
+        child: Listener(
+          onPointerMove: (event) {
+            if (event.buttons == kMiddleMouseButton) {
+              final matrix = _transform.value.clone();
+              matrix.storage[12] += event.delta.dx;
+              matrix.storage[13] += event.delta.dy;
+              _transform.value = matrix;
+            }
+          },
+          onPointerSignal: (event) {
+            if (event is PointerScrollEvent) {
+              final isZoomKey = HardwareKeyboard.instance.isControlPressed ||
+                  HardwareKeyboard.instance.isMetaPressed;
+              if (isZoomKey) {
+                final double dy = event.scrollDelta.dy;
+                if (dy != 0) {
+                  final double scaleDelta = dy > 0 ? 0.9 : 1.1;
+                  final matrix = _transform.value.clone();
+                  final double tx = matrix.storage[12];
+                  final double ty = matrix.storage[13];
+                  final double currentScale = matrix.getMaxScaleOnAxis();
+                  const minScale = 0.15;
+                  const maxScale = 12.0;
+                  final double newScale = (currentScale * scaleDelta).clamp(minScale, maxScale);
+                  final double actualFactor = newScale / currentScale;
+                  if (actualFactor != 1.0) {
+                    final px = event.localPosition.dx;
+                    final py = event.localPosition.dy;
+                    matrix.storage[0] *= actualFactor;
+                    matrix.storage[5] *= actualFactor;
+                    matrix.storage[10] *= actualFactor;
+                    matrix.storage[12] = px + (tx - px) * actualFactor;
+                    matrix.storage[13] = py + (ty - py) * actualFactor;
+                    _transform.value = matrix;
+                  }
+                }
+              } else {
+                final matrix = _transform.value.clone();
+                matrix.storage[12] -= event.scrollDelta.dx;
+                matrix.storage[13] -= event.scrollDelta.dy;
+                _transform.value = matrix;
+              }
+            }
+          },
+          child: RawGestureDetector(
+            gestures: {
+              if (usesDrag)
+                LeftClickPanGestureRecognizer: GestureRecognizerFactoryWithHandlers<LeftClickPanGestureRecognizer>(
+                  () => LeftClickPanGestureRecognizer(
+                    allowedButtonsFilter: (int buttons) => buttons == kPrimaryButton,
+                  ),
+                  (LeftClickPanGestureRecognizer instance) {
+                    instance
+                      ..onStart = (details) {
+                        if (state.tool == Phase1Tool.drawPhysicsArea) {
+                          final snapped = _getSnappedOffset(details.localPosition, cell, state.snapToGrid);
+                          notifier.trackAreaDragStart(snapped);
+                        } else {
+                          final (x, y) = toCell(details.localPosition);
+                          notifier.dragStart(x, y);
+                        }
+                      }
+                      ..onUpdate = (details) {
+                        if (state.tool == Phase1Tool.drawPhysicsArea) {
+                          final snapped = _getSnappedOffset(details.localPosition, cell, state.snapToGrid);
+                          notifier.trackAreaDragUpdate(snapped);
+                        } else {
+                          final (x, y) = toCell(details.localPosition);
+                          notifier.dragUpdate(x, y);
+                        }
+                      }
+                      ..onEnd = (_) {
+                        if (state.tool == Phase1Tool.drawPhysicsArea) {
+                          notifier.trackAreaDragEnd();
+                        } else {
+                          notifier.dragEnd();
+                        }
+                      };
+                  },
+                ),
+              TapGestureRecognizer: GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+                () => TapGestureRecognizer(
                   allowedButtonsFilter: (int buttons) => buttons == kPrimaryButton,
                 ),
-                (LeftClickPanGestureRecognizer instance) {
-                  instance
-                    ..onStart = (details) {
+                (TapGestureRecognizer instance) {
+                  instance.onTapUp = (details) {
+                    if (state.tool == Phase1Tool.drawPhysicsArea) {
+                      final snapped = _getSnappedOffset(details.localPosition, cell, state.snapToGrid);
+                      notifier.trackAreaTap(snapped);
+                    } else {
                       final (x, y) = toCell(details.localPosition);
-                      notifier.dragStart(x, y);
+                      notifier.tapCell(x, y);
                     }
-                    ..onUpdate = (details) {
-                      final (x, y) = toCell(details.localPosition);
-                      notifier.dragUpdate(x, y);
-                    }
-                    ..onEnd = (_) => notifier.dragEnd();
+                  };
                 },
               ),
-            TapGestureRecognizer: GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
-              () => TapGestureRecognizer(
-                allowedButtonsFilter: (int buttons) => buttons == kPrimaryButton,
-              ),
-              (TapGestureRecognizer instance) {
-                instance.onTapUp = (details) {
-                  final (x, y) = toCell(details.localPosition);
-                  notifier.tapCell(x, y);
-                };
+            },
+            child: MouseRegion(
+              onHover: (event) {
+                if (state.tool == Phase1Tool.drawPhysicsArea) {
+                  final snapped = _getSnappedOffset(event.localPosition, cell, state.snapToGrid);
+                  notifier.updatePhysicsAreaHover(snapped);
+                }
               },
-            ),
-          },
-          child: CustomPaint(
-            size: Size(image.width.toDouble(), image.height.toDouble()),
-            painter: _MaskCanvasPainter(
-              image: image,
-              masks: state.masks,
-              selectedIndex: state.selectedIndex,
-              tool: state.tool,
-              dragPreview: state.dragPreview,
-              paintPreview: state.paintPreview,
-              movePreview: state.movePreview,
-              scale: _transform.value.getMaxScaleOnAxis(),
+              onExit: (_) {
+                if (state.tool == Phase1Tool.drawPhysicsArea) {
+                  notifier.updatePhysicsAreaHover(null);
+                }
+              },
+              child: CustomPaint(
+                size: Size(image.width.toDouble(), image.height.toDouble()),
+                painter: _MaskCanvasPainter(
+                  image: image,
+                  masks: state.masks,
+                  selectedIndex: state.selectedIndex,
+                  tool: state.tool,
+                  dragPreview: state.dragPreview,
+                  paintPreview: state.paintPreview,
+                  movePreview: state.movePreview,
+                  scale: _transform.value.getMaxScaleOnAxis(),
+                  selectedVertexIndex: state.selectedVertexIndex,
+                  physicsAreaHoverPos: state.physicsAreaHoverPos,
+                  curveMode: state.curveMode,
+                  curveDraftPoints: state.curveDraftPoints,
+                ),
+              ),
             ),
           ),
         ),
@@ -206,6 +295,10 @@ class _MaskCanvasPainter extends CustomPainter {
     required this.paintPreview,
     required this.movePreview,
     required this.scale,
+    required this.selectedVertexIndex,
+    required this.physicsAreaHoverPos,
+    required this.curveMode,
+    required this.curveDraftPoints,
   });
 
   final ui.Image image;
@@ -216,6 +309,10 @@ class _MaskCanvasPainter extends CustomPainter {
   final Set<Cell>? paintPreview;
   final MovePreview? movePreview;
   final double scale;
+  final int? selectedVertexIndex;
+  final ui.Offset? physicsAreaHoverPos;
+  final bool curveMode;
+  final List<Vec2> curveDraftPoints;
 
   static const _cell = GridConstants.cellSize;
 
@@ -226,7 +323,6 @@ class _MaskCanvasPainter extends CustomPainter {
 
     final move = movePreview;
     for (var i = 0; i < masks.length; i++) {
-      // The block being moved is drawn separately at its previewed spot.
       if (move != null && move.index == i && (move.dx != 0 || move.dy != 0)) {
         continue;
       }
@@ -236,13 +332,34 @@ class _MaskCanvasPainter extends CustomPainter {
     _paintMovePreview(canvas);
     _paintDragPreview(canvas);
     _paintPaintPreview(canvas);
+    _paintCrosshair(canvas, size);
+  }
+
+  void _paintCrosshair(Canvas canvas, Size size) {
+    final hover = physicsAreaHoverPos;
+    if (tool == Phase1Tool.drawPhysicsArea && hover != null) {
+      final paint = Paint()
+        ..color = Colors.purpleAccent.withValues(alpha: 0.3)
+        ..strokeWidth = 1.0 / scale
+        ..style = PaintingStyle.stroke;
+      // Horizontal line
+      canvas.drawLine(Offset(0, hover.dy), Offset(size.width, hover.dy), paint);
+      // Vertical line
+      canvas.drawLine(Offset(hover.dx, 0), Offset(hover.dx, size.height), paint);
+
+      // Draw snap target dot
+      canvas.drawCircle(
+        hover,
+        2.5 / scale,
+        Paint()..color = Colors.purpleAccent,
+      );
+    }
   }
 
   void _paintMovePreview(Canvas canvas) {
     final move = movePreview;
     if (move == null || (move.dx == 0 && move.dy == 0)) return;
     final mask = masks[move.index];
-    // Ghost outline at the original position.
     final origin = Rect.fromLTWH(mask.gridX * _cell, mask.gridY * _cell,
         mask.widthCells * _cell, mask.heightCells * _cell);
     canvas.drawRect(
@@ -301,6 +418,73 @@ class _MaskCanvasPainter extends CustomPainter {
     }
   }
 
+  List<Vec2> _generateArc(Vec2 center, Vec2 start, Vec2 end, int widthCells, int heightCells) {
+    final double r = math.sqrt((start.x - center.x) * (start.x - center.x) +
+        (start.y - center.y) * (start.y - center.y));
+    if (r == 0) return [start];
+
+    final double thetaA = math.atan2(start.y - center.y, start.x - center.x);
+    final double thetaB = math.atan2(end.y - center.y, end.x - center.x);
+
+    const int steps = 12;
+    final double w = widthCells * _cell;
+    final double h = heightCells * _cell;
+
+    double angleB1 = thetaB;
+    if (angleB1 < thetaA) angleB1 += 2.0 * math.pi;
+    final points1 = <Vec2>[];
+    for (var i = 0; i <= steps; i++) {
+      final t = thetaA + (angleB1 - thetaA) * (i / steps);
+      points1.add(Vec2(
+        (center.x + r * math.cos(t)).roundToDouble(),
+        (center.y + r * math.sin(t)).roundToDouble(),
+      ));
+    }
+
+    double angleB2 = thetaB;
+    if (angleB2 > thetaA) angleB2 -= 2.0 * math.pi;
+    final points2 = <Vec2>[];
+    for (var i = 0; i <= steps; i++) {
+      final t = thetaA + (angleB2 - thetaA) * (i / steps);
+      points2.add(Vec2(
+        (center.x + r * math.cos(t)).roundToDouble(),
+        (center.y + r * math.sin(t)).roundToDouble(),
+      ));
+    }
+
+    int countInside(List<Vec2> pts) {
+      var count = 0;
+      for (final p in pts) {
+        if (p.x >= 0.0 && p.x <= w && p.y >= 0.0 && p.y <= h) {
+          count++;
+        }
+      }
+      return count;
+    }
+
+    if (countInside(points1) >= countInside(points2)) {
+      return points1;
+    } else {
+      return points2;
+    }
+  }
+
+  void _drawLabel(Canvas canvas, Offset offset, String text, Paint bgPaint, Paint fgPaint) {
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: fgPaint.color,
+          fontSize: 9.0 / scale,
+          fontWeight: FontWeight.bold,
+          backgroundColor: bgPaint.color,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    textPainter.paint(canvas, offset + Offset(6.0 / scale, -10.0 / scale));
+  }
+
   void _paintMask(Canvas canvas, MaskDraft mask, {required bool selected}) {
     final borderColor = selected ? Colors.yellowAccent : Colors.lightGreen;
     final fillPaint = Paint()
@@ -321,8 +505,6 @@ class _MaskCanvasPainter extends CustomPainter {
       canvas.drawRect(rect, fillPaint);
       canvas.drawRect(rect, strokePaint);
     } else {
-      // Freeform: fill each occupied cell and stroke only boundary edges
-      // (edges whose neighbor cell is not part of the shape).
       for (final (x, y) in cells) {
         final rect = Rect.fromLTWH(origin.dx + x * _cell,
             origin.dy + y * _cell, _cell, _cell);
@@ -343,7 +525,6 @@ class _MaskCanvasPainter extends CustomPainter {
     }
 
     if (mask.category != BlockCategory.islandTile) {
-      // Block ID label above the box.
       final fontSize = (12.0 / scale).clamp(4.0, 48.0);
       final textPainter = TextPainter(
         text: TextSpan(
@@ -360,6 +541,156 @@ class _MaskCanvasPainter extends CustomPainter {
       textPainter.paint(canvas, origin + Offset(2 / scale, -(fontSize + 4) / scale));
     }
 
+    // Draw physicsTrackArea polygon (purple lines)
+    if (mask.physicsTrackArea.isNotEmpty) {
+      final path = Path();
+      final pts = mask.physicsTrackArea;
+      path.moveTo(origin.dx + pts.first.x, origin.dy + pts.first.y);
+      for (var i = 1; i < pts.length; i++) {
+        path.lineTo(origin.dx + pts[i].x, origin.dy + pts[i].y);
+      }
+      path.close();
+
+      // Drivable road area fill
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = Colors.purpleAccent.withValues(alpha: selected ? 0.15 : 0.08)
+          ..style = PaintingStyle.fill,
+      );
+
+      // Polygon boundary (purple stroke)
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = Colors.purpleAccent.withValues(alpha: selected ? 1.0 : 0.5)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = (selected ? 2.0 : 1.0) / scale,
+      );
+
+      // If drawPhysicsArea tool is active AND selected, draw interactive vertices and preview lines
+      if (selected && tool == Phase1Tool.drawPhysicsArea) {
+        for (var i = 0; i < pts.length; i++) {
+          final pt = pts[i];
+          final center = origin + Offset(pt.x, pt.y);
+          final isVertexSelected = selectedVertexIndex == i;
+
+          // Outer ring
+          canvas.drawCircle(
+            center,
+            (isVertexSelected ? 6.0 : 4.0) / scale,
+            Paint()..color = isVertexSelected ? Colors.yellowAccent : Colors.purple,
+          );
+          // Inner core
+          canvas.drawCircle(
+            center,
+            (isVertexSelected ? 3.0 : 2.0) / scale,
+            Paint()..color = isVertexSelected ? Colors.black : Colors.white,
+          );
+
+          // Draw index number for readability
+          final textPainter = TextPainter(
+            text: TextSpan(
+              text: '${i + 1}',
+              style: TextStyle(
+                color: Colors.purpleAccent,
+                fontSize: 10.0 / scale,
+                fontWeight: FontWeight.bold,
+                backgroundColor: Colors.black.withValues(alpha: 0.5),
+              ),
+            ),
+            textDirection: TextDirection.ltr,
+          )..layout();
+          textPainter.paint(canvas, center + Offset(6.0 / scale, -10.0 / scale));
+        }
+
+        // Draw preview line to hover position (if not in curveMode)
+        final hover = physicsAreaHoverPos;
+        if (!curveMode && hover != null && pts.isNotEmpty) {
+          final last = pts.last;
+          canvas.drawLine(
+            origin + Offset(last.x, last.y),
+            hover,
+            Paint()
+              ..color = Colors.purpleAccent.withValues(alpha: 0.6)
+              ..strokeWidth = 1.5 / scale
+              ..style = PaintingStyle.stroke,
+          );
+        }
+      }
+    }
+
+    // Curve drawing Mode overlays
+    if (selected && tool == Phase1Tool.drawPhysicsArea && curveMode) {
+      final bg = Paint()..color = Colors.black.withValues(alpha: 0.6);
+      final fgCenter = Paint()..color = Colors.purpleAccent;
+      final fgStart = Paint()..color = Colors.purpleAccent;
+
+      final draft = curveDraftPoints;
+      final hover = physicsAreaHoverPos;
+
+      if (draft.isNotEmpty) {
+        final cLocal = draft[0];
+        final center = origin + Offset(cLocal.x, cLocal.y);
+        // Paint Center
+        canvas.drawCircle(center, 5.0 / scale, Paint()..color = Colors.purpleAccent);
+        _drawLabel(canvas, center, 'Center', bg, fgCenter);
+
+        if (draft.length == 1 && hover != null) {
+          // Draw preview radius line from Center to cursor
+          canvas.drawLine(
+            center,
+            hover,
+            Paint()
+              ..color = Colors.purpleAccent.withValues(alpha: 0.5)
+              ..strokeWidth = 1.5 / scale
+              ..style = PaintingStyle.stroke,
+          );
+        } else if (draft.length == 2) {
+          final sLocal = draft[1];
+          final start = origin + Offset(sLocal.x, sLocal.y);
+          // Paint Start
+          canvas.drawCircle(start, 5.0 / scale, Paint()..color = Colors.purpleAccent);
+          _drawLabel(canvas, start, 'Start', bg, fgStart);
+
+          // Draw dashed circle radius guideline
+          final double r = math.sqrt((start.dx - center.dx) * (start.dx - center.dx) +
+              (start.dy - center.dy) * (start.dy - center.dy));
+          canvas.drawCircle(
+            center,
+            r,
+            Paint()
+              ..color = Colors.purpleAccent.withValues(alpha: 0.15)
+              ..strokeWidth = 1.0 / scale
+              ..style = PaintingStyle.stroke,
+          );
+
+          if (hover != null) {
+            // Generate the preview arc using center, start, and current hover angle
+            final hoverLocal = Vec2(hover.dx - origin.dx, hover.dy - origin.dy);
+            final arcPts = _generateArc(draft[0], draft[1], hoverLocal, mask.widthCells, mask.heightCells);
+
+            if (arcPts.isNotEmpty) {
+              final arcPath = Path();
+              arcPath.moveTo(origin.dx + arcPts.first.x, origin.dy + arcPts.first.y);
+              for (var i = 1; i < arcPts.length; i++) {
+                arcPath.lineTo(origin.dx + arcPts[i].x, origin.dy + arcPts[i].y);
+              }
+              canvas.drawPath(
+                arcPath,
+                Paint()
+                  ..color = Colors.purpleAccent.withValues(alpha: 0.8)
+                  ..strokeWidth = 2.0 / scale
+                  ..style = PaintingStyle.stroke,
+              );
+            }
+          }
+        }
+      }
+    }
+
+    // Hide all port markers in drawPhysicsArea mode.
+    if (tool != Phase1Tool.drawPhysicsArea) {
       for (final port in mask.ports) {
         final (extentW, extentH) = port.cellExtent;
         final stripRect = Rect.fromLTWH(
@@ -371,7 +702,7 @@ class _MaskCanvasPainter extends CustomPainter {
         final portColor = defaultPortColor(port.direction);
         if (port.span > 1) {
           final rrect = RRect.fromRectAndRadius(
-              stripRect.deflate(1.5), const Radius.circular(4));
+              stripRect.slate(1.5), const Radius.circular(4));
           canvas.drawRRect(
               rrect, Paint()..color = portColor.withValues(alpha: 0.25));
           canvas.drawRRect(
@@ -387,8 +718,6 @@ class _MaskCanvasPainter extends CustomPainter {
         var radius = _cell * 0.6;
 
         if (mask.category == BlockCategory.islandTile) {
-          // Push the small arrows out toward their corresponding edges/corners
-          // so they don't all overlap at the center of the 1x1 cell.
           final angle = port.direction.angle;
           center += Offset(math.cos(angle), math.sin(angle)) * (_cell * 0.35);
           radius = _cell * 0.2;
@@ -403,6 +732,7 @@ class _MaskCanvasPainter extends CustomPainter {
         );
       }
     }
+  }
 
   @override
   bool shouldRepaint(_MaskCanvasPainter oldDelegate) =>
@@ -413,7 +743,11 @@ class _MaskCanvasPainter extends CustomPainter {
       oldDelegate.dragPreview != dragPreview ||
       oldDelegate.paintPreview != paintPreview ||
       oldDelegate.movePreview != movePreview ||
-      oldDelegate.scale != scale;
+      oldDelegate.scale != scale ||
+      oldDelegate.selectedVertexIndex != selectedVertexIndex ||
+      oldDelegate.physicsAreaHoverPos != physicsAreaHoverPos ||
+      oldDelegate.curveMode != curveMode ||
+      oldDelegate.curveDraftPoints != curveDraftPoints;
 }
 
 class LeftClickPanGestureRecognizer extends PanGestureRecognizer {
@@ -423,6 +757,14 @@ class LeftClickPanGestureRecognizer extends PanGestureRecognizer {
 
   @override
   void addAllowedPointerPanZoom(PointerPanZoomStartEvent event) {
-    // Ignore trackpad pan-zoom events so they fall through to InteractiveViewer.
   }
+}
+
+extension on Rect {
+  Rect slate(double delta) => Rect.fromLTRB(
+        left + delta,
+        top + delta,
+        right - delta,
+        bottom - delta,
+      );
 }
