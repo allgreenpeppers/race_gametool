@@ -92,37 +92,40 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
       return;
     }
     final library = ref.read(assetLibraryProvider);
-    final chosen = await showMenu<ConnectCandidate>(
-      context: context,
-      position: RelativeRect.fromLTRB(
-        globalPosition.dx,
-        globalPosition.dy,
-        globalPosition.dx + 1,
-        globalPosition.dy + 1,
-      ),
-      items: [
-        for (final c in candidates)
-          PopupMenuItem<ConnectCandidate>(
-            value: c,
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 32,
-                  height: 32,
-                  child: library.sheetImage == null
-                      ? const Icon(Icons.widgets_outlined, size: 20)
-                      : BlockThumbnail(
-                          image: library.sheetImage!,
-                          rect: c.def.spriteSheetRect,
-                        ),
-                ),
-                const SizedBox(width: 10),
-                Text(c.def.id),
-              ],
+    // A single compatible block needs no menu: auto-select it.
+    final chosen = candidates.length == 1
+        ? candidates.single
+        : await showMenu<ConnectCandidate>(
+            context: context,
+            position: RelativeRect.fromLTRB(
+              globalPosition.dx,
+              globalPosition.dy,
+              globalPosition.dx + 1,
+              globalPosition.dy + 1,
             ),
-          ),
-      ],
-    );
+            items: [
+              for (final c in candidates)
+                PopupMenuItem<ConnectCandidate>(
+                  value: c,
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 32,
+                        height: 32,
+                        child: library.sheetImage == null
+                            ? const Icon(Icons.widgets_outlined, size: 20)
+                            : BlockThumbnail(
+                                image: library.sheetImage!,
+                                rect: c.def.spriteSheetRect,
+                              ),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(c.def.id),
+                    ],
+                  ),
+                ),
+            ],
+          );
     if (chosen != null) {
       notifier.chooseConnection(
         hit,
@@ -286,6 +289,11 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
                         final (x, y) = _toCell(d.localPosition);
                         if (state.tool == LevelTool.multi) {
                           notifier.multiDragStart(x, y);
+                        } else if (state.tool == LevelTool.stamp &&
+                            state.activeLayer == MapLayer.track) {
+                          // Track only: dragging pulls a straight run of
+                          // the selected block, committed on release.
+                          notifier.stampDragStart(x, y);
                         } else {
                           handleDragCell((x, y));
                         }
@@ -294,6 +302,9 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
                         final (x, y) = _toCell(d.localPosition);
                         if (state.tool == LevelTool.multi) {
                           notifier.multiDragUpdate(x, y);
+                        } else if (state.tool == LevelTool.stamp &&
+                            state.activeLayer == MapLayer.track) {
+                          notifier.stampDragUpdate(x, y);
                         } else {
                           handleDragCell((x, y));
                         }
@@ -303,7 +314,9 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
                           notifier.multiDragEnd(
                               cols: LevelCanvas.cols, rows: LevelCanvas.rows);
                         } else if (state.tool == LevelTool.stamp) {
-                          if (state.activeLayer != MapLayer.island) {
+                          if (state.activeLayer == MapLayer.track) {
+                            notifier.stampDragEnd();
+                          } else if (state.activeLayer != MapLayer.island) {
                             final hover = state.hoverCell;
                             if (hover != null) {
                               notifier.stampAt(hover.$1, hover.$2);
@@ -334,6 +347,7 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
                 rectOf: notifier.rectOf,
                 occupied: occupied,
                 extendPreview: state.extendPreview,
+                stampDragPreview: state.stampDragPreview,
                 selection: state.highlighted,
                 marquee: state.marquee,
                 groupDelta: state.groupDelta,
@@ -360,6 +374,7 @@ class _LevelPainter extends CustomPainter {
     required this.rectOf,
     required this.occupied,
     required this.extendPreview,
+    required this.stampDragPreview,
     required this.selection,
     required this.marquee,
     required this.groupDelta,
@@ -377,6 +392,7 @@ class _LevelPainter extends CustomPainter {
   final CellRect? Function(BlockPlacement) rectOf;
   final Set<(int, int)>? occupied;
   final ExtendPreview? extendPreview;
+  final ExtendPreview? stampDragPreview;
   final Set<int> selection;
   final (int, int, int, int)? marquee;
   final (int, int)? groupDelta;
@@ -399,22 +415,33 @@ class _LevelPainter extends CustomPainter {
     // Render underlying manual grass mask under blocks
     _paintGrassMask(canvas, size);
 
-    // Other layers first, dimmed for context; the active layer on top.
+    // Unknown blocks have no layer; keep their red placeholder visible at
+    // the bottom of the stack.
     for (var i = 0; i < placements.length; i++) {
-      if (_layerOf(placements[i]) != activeLayer) {
+      if (_layerOf(placements[i]) == null) {
         _paintPlacement(canvas, placements[i], selected: false, dim: true);
       }
     }
-    for (var i = 0; i < placements.length; i++) {
-      if (_layerOf(placements[i]) == activeLayer) {
+    // Layers stack in enum order (island under track under decoration
+    // under function). Layers below the active one really do sit under it,
+    // so they render solid; only layers above are dimmed so they don't
+    // hide what is being edited.
+    for (final layer in MapLayer.values) {
+      final dim = layer.index > activeLayer.index;
+      for (var i = 0; i < placements.length; i++) {
+        if (_layerOf(placements[i]) != layer) continue;
         _paintPlacement(canvas, placements[i],
-            selected: selection.contains(i));
+            selected: layer == activeLayer && selection.contains(i),
+            dim: dim);
       }
     }
 
     _paintAlignmentGuides(canvas, size);
     _paintStampGhost(canvas);
-    _paintExtendPreview(canvas);
+    // The Connect extender shows a clickable "+" per ghost; the drag-stamp
+    // run is committed on release, so it renders ghosts only.
+    _paintRunPreview(canvas, extendPreview, showPlus: true);
+    _paintRunPreview(canvas, stampDragPreview, showPlus: false);
     _paintGroupMove(canvas);
     _paintMarquee(canvas);
     _paintSpawn(canvas);
@@ -535,8 +562,8 @@ class _LevelPainter extends CustomPainter {
     );
   }
 
-  void _paintExtendPreview(Canvas canvas) {
-    final preview = extendPreview;
+  void _paintRunPreview(Canvas canvas, ExtendPreview? preview,
+      {required bool showPlus}) {
     if (preview == null) return;
     final def = blocks.blockById(preview.blockId);
     if (def == null) return;
@@ -569,7 +596,7 @@ class _LevelPainter extends CustomPainter {
           ..color = Colors.cyanAccent.withValues(alpha: 0.7),
       );
       // A "+" at each step; clicking step i places i+1 tiles.
-      _paintPlus(canvas, dst.center, _cell * 0.42);
+      if (showPlus) _paintPlus(canvas, dst.center, _cell * 0.42);
     }
   }
 
@@ -643,9 +670,11 @@ class _LevelPainter extends CustomPainter {
       );
     }
 
-    // Island tiles are autotiled, not port-wired: their 8-direction ports
-    // are not shown on the canvas.
-    if (def.category != BlockCategory.islandTile) {
+    // Port glyphs are wiring detail for the track editor only: other
+    // editing layers render clean sprites. Island tiles are autotiled,
+    // not port-wired, so theirs never show even there.
+    if (activeLayer == MapLayer.track &&
+        def.category != BlockCategory.islandTile) {
       _paintPorts(canvas, def, p.gridX, p.gridY);
     }
   }
@@ -745,6 +774,9 @@ class _LevelPainter extends CustomPainter {
     }
 
     if (tool != LevelTool.stamp) return;
+    // While drag-stamping, the run preview is the ghost; the single hover
+    // ghost would just double-draw over its anchor tile.
+    if (stampDragPreview != null) return;
     final hover = hoverCell;
     if (hover == null) return;
 
@@ -814,6 +846,7 @@ class _LevelPainter extends CustomPainter {
       old.stampId != stampId ||
       old.occupied != occupied ||
       old.extendPreview != extendPreview ||
+      old.stampDragPreview != stampDragPreview ||
       old.selection != selection ||
       old.marquee != marquee ||
       old.groupDelta != groupDelta ||

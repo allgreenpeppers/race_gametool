@@ -166,6 +166,7 @@ class LevelEditorState {
     this.selectedPlacementIndex,
     this.hoverCell,
     this.extendPreview,
+    this.stampDragPreview,
     this.selection = const {},
     this.marquee,
     this.groupDelta,
@@ -198,6 +199,11 @@ class LevelEditorState {
 
   /// Active straight-extension preview, if any.
   final ExtendPreview? extendPreview;
+
+  /// Ghost run while drag-stamping a straight track block: dragging with
+  /// the Stamp tool on the track layer pulls a semi-transparent run of
+  /// tiles that is committed on release.
+  final ExtendPreview? stampDragPreview;
 
   /// Placements selected for group operations (Multi tool).
   final Set<int> selection;
@@ -242,6 +248,7 @@ class LevelEditorState {
     int? Function()? selectedPlacementIndex,
     (int, int)? Function()? hoverCell,
     ExtendPreview? Function()? extendPreview,
+    ExtendPreview? Function()? stampDragPreview,
     Set<int>? selection,
     (int, int, int, int)? Function()? marquee,
     (int, int)? Function()? groupDelta,
@@ -268,6 +275,9 @@ class LevelEditorState {
         hoverCell: hoverCell != null ? hoverCell() : this.hoverCell,
         extendPreview:
             extendPreview != null ? extendPreview() : this.extendPreview,
+        stampDragPreview: stampDragPreview != null
+            ? stampDragPreview()
+            : this.stampDragPreview,
         selection: selection ?? this.selection,
         marquee: marquee != null ? marquee() : this.marquee,
         groupDelta: groupDelta != null ? groupDelta() : this.groupDelta,
@@ -320,6 +330,7 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
       selectedPlacementIndex: () => null,
       selection: const {},
       extendPreview: () => null,
+      stampDragPreview: () => null,
       isDirty: true,
       statusMessage: () => 'Undo successful',
     );
@@ -371,6 +382,7 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
         selection: const {},
         marquee: () => null,
         extendPreview: () => null,
+        stampDragPreview: () => null,
       );
 
   void setStatus(String message) =>
@@ -654,7 +666,9 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
     if (_isStraightExtender(candidate.def, hit)) {
       final positions = straightRunPositions(hit, candidate,
           cols: cols, rows: rows);
-      if (positions.isEmpty) {
+      // With room for at most one tile there is no length to choose:
+      // place it directly instead of asking via the extension preview.
+      if (positions.length <= 1) {
         placeConnected(candidate);
         return;
       }
@@ -742,6 +756,134 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
       selectedPlacementIndex: () => state.placements.length,
       tool: nextTool,
       statusMessage: () => 'Placed $id at ($x, $y)',
+    );
+  }
+
+  // --- Drag-stamp straight runs ----------------------------------------------
+
+  (int, int)? _stampDragAnchor;
+
+  /// Whether a straight tile runs vertically (true) or horizontally
+  /// (false), from its port axis. Null when the block cannot be pulled
+  /// into a run at all: corners, forks and diagonal segments drag-stamp a
+  /// single tile, exactly like a click.
+  bool? _straightRunVertical(BlockDef def) {
+    if (!_isStraightTile(def)) return null;
+    switch (def.ports.first.direction) {
+      case PortDirection.up:
+      case PortDirection.down:
+        return true;
+      case PortDirection.left:
+      case PortDirection.right:
+        return false;
+      default:
+        return null;
+    }
+  }
+
+  /// Ghost origins for a drag-stamp run: from the anchored origin toward
+  /// the hovered cell, projected onto the block's straight axis, stepping
+  /// one tile length per tile and stopping at the grid edge or the first
+  /// obstacle. Shares the run geometry with the Connect-mode extender so
+  /// dragged tiles land exactly where connected ones would.
+  List<(int, int)> _dragRunPositions(
+      BlockDef def, (int, int) anchor, int cellX, int cellY) {
+    final (ax, ay) = anchor;
+    if (_wouldOverlap(def.id, ax, ay)) return const [];
+    final vertical = _straightRunVertical(def);
+    if (vertical == null) return [(ax, ay)];
+    final step = vertical ? def.boundingBox.height : def.boundingBox.width;
+    final delta = vertical ? cellY - ay : cellX - ax;
+    final sign = delta.isNegative ? -1 : 1;
+    // Tiles needed for the run to cover the hovered cell. A negative run
+    // grows from the anchor's far side, hence the ceiling division.
+    final count = delta == 0
+        ? 1
+        : (delta.isNegative
+                ? (delta.abs() + step - 1) ~/ step
+                : delta.abs() ~/ step) +
+            1;
+    final positions = <(int, int)>[];
+    for (var i = 0; i < count; i++) {
+      final x = vertical ? ax : ax + sign * step * i;
+      final y = vertical ? ay + sign * step * i : ay;
+      final inBounds = x >= 0 &&
+          y >= 0 &&
+          x + def.boundingBox.width <= GridConstants.levelGridCols &&
+          y + def.boundingBox.height <= GridConstants.levelGridRows;
+      if (!inBounds || _wouldOverlap(def.id, x, y)) break;
+      positions.add((x, y));
+    }
+    return positions;
+  }
+
+  void stampDragStart(int gridX, int gridY) {
+    final id = state.selectedPaletteId;
+    if (id == null) {
+      state = state.copyWith(
+          statusMessage: () => 'Select a palette block first');
+      return;
+    }
+    final def = _def(id);
+    final (x, y) = stampOrigin(id, gridX, gridY);
+    if (def == null || x == null || y == null) return;
+    _stampDragAnchor = (x, y);
+    state = state.copyWith(
+      hoverCell: () => (gridX, gridY),
+      stampDragPreview: () => ExtendPreview(
+          blockId: id, positions: _dragRunPositions(def, (x, y), x, y)),
+    );
+  }
+
+  void stampDragUpdate(int gridX, int gridY) {
+    final anchor = _stampDragAnchor;
+    final preview = state.stampDragPreview;
+    if (anchor == null || preview == null) {
+      setHover((gridX, gridY));
+      return;
+    }
+    final def = _def(preview.blockId);
+    if (def == null) return;
+    state = state.copyWith(
+      hoverCell: () => (gridX, gridY),
+      stampDragPreview: () => ExtendPreview(
+          blockId: preview.blockId,
+          positions: _dragRunPositions(def, anchor, gridX, gridY)),
+    );
+  }
+
+  /// Commits the dragged run: places every ghost tile, then hands off to
+  /// Connect exactly like a single stamp click does.
+  void stampDragEnd() {
+    final preview = state.stampDragPreview;
+    _stampDragAnchor = null;
+    if (preview == null) return;
+    if (preview.positions.isEmpty) {
+      state = state.copyWith(
+        stampDragPreview: () => null,
+        statusMessage: () =>
+            'Cannot place ${preview.blockId} here: overlaps another block',
+      );
+      return;
+    }
+    _saveToHistory();
+    final additions = [
+      for (final (x, y) in preview.positions)
+        BlockPlacement(blockId: preview.blockId, gridX: x, gridY: y),
+    ];
+    final nextTool = state.activeLayer == MapLayer.track ||
+            state.activeLayer == MapLayer.function
+        ? LevelTool.connect
+        : state.tool;
+    state = state.copyWith(
+      placements: [...state.placements, ...additions],
+      stampDragPreview: () => null,
+      selectedPlacementIndex: () => state.placements.length + additions.length - 1,
+      tool: nextTool,
+      statusMessage: () => additions.length == 1
+          ? 'Placed ${preview.blockId} at '
+              '(${additions.first.gridX}, ${additions.first.gridY})'
+          : 'Placed ${additions.length} ${preview.blockId} tiles',
     );
   }
 
@@ -1230,7 +1372,17 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
       }
     }
 
-    final result = autotileIsland(grid: grid, tileIdsBySignature: tiles);
+    // The island must be solid: fill water pockets fully enclosed by the
+    // mask (e.g. the middle of a track loop) before tiling. The concave
+    // outline itself is preserved -- only interior holes are filled.
+    final solid = fillEnclosedWater(grid);
+    final solidMask = <(int, int)>{
+      for (var y = 0; y < solid.length; y++)
+        for (var x = 0; x < solid[y].length; x++)
+          if (solid[y][x] == 1) (x, y),
+    };
+
+    final result = autotileIsland(grid: solid, tileIdsBySignature: tiles);
 
     // Replace island-layer placements, keep everything else.
     final kept = [
@@ -1243,7 +1395,7 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
             ? ' (${result.unmatched} cells unmatched -- add concave corners)'
             : '';
     state = state.copyWith(
-      islandGrassMask: () => mask,
+      islandGrassMask: () => solidMask,
       placements: [...kept, ...result.placements],
       selection: const {},
       selectedPlacementIndex: () => null,

@@ -78,6 +78,51 @@ List<List<int>> _smooth(List<List<int>> grid, int cols, int rows) {
   return out;
 }
 
+/// Fills water pockets fully enclosed by grass, so the autotiled island is
+/// always solid. Any water cell that cannot reach the grid border through
+/// water is landlocked inside the island and becomes grass. The coastline
+/// itself is untouched, so a concave outline survives -- only true interior
+/// holes (e.g. the middle of a track loop) are filled.
+List<List<int>> fillEnclosedWater(List<List<int>> grid) {
+  final rows = grid.length;
+  final cols = rows == 0 ? 0 : grid[0].length;
+  if (rows == 0 || cols == 0) return grid;
+  final reachable = List.generate(rows, (_) => List.filled(cols, false));
+  final queue = Queue<(int, int)>();
+  void seed(int x, int y) {
+    if (grid[y][x] == 0 && !reachable[y][x]) {
+      reachable[y][x] = true;
+      queue.add((x, y));
+    }
+  }
+
+  for (var x = 0; x < cols; x++) {
+    seed(x, 0);
+    seed(x, rows - 1);
+  }
+  for (var y = 0; y < rows; y++) {
+    seed(0, y);
+    seed(cols - 1, y);
+  }
+  const steps = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+  while (queue.isNotEmpty) {
+    final (x, y) = queue.removeFirst();
+    for (final (dx, dy) in steps) {
+      final nx = x + dx;
+      final ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+      seed(nx, ny);
+    }
+  }
+  return [
+    for (var y = 0; y < rows; y++)
+      [
+        for (var x = 0; x < cols; x++)
+          grid[y][x] == 1 || !reachable[y][x] ? 1 : 0,
+      ],
+  ];
+}
+
 bool _grass(List<List<int>> grid, int x, int y, int cols, int rows) =>
     x >= 0 && y >= 0 && x < cols && y < rows && grid[y][x] == 1;
 

@@ -278,6 +278,19 @@ void _connectionTests() {
     }
   });
 
+  test('a straight with room for only one tile places it directly', () {
+    // With a 22-wide grid the run from x15 holds exactly one tile, so
+    // there is no length to choose: chooseConnection must place it
+    // immediately instead of entering the extension preview.
+    final hit = notifier.connectPortAt(15, 10)!;
+    final candidate = notifier.connectCandidates(hit).first;
+    notifier.chooseConnection(hit, candidate, cols: 22, rows: 40);
+    final state = container.read(levelEditorProvider(0));
+    expect(state.extendPreview, isNull);
+    expect(state.placements.length, 2);
+    expect(state.placements[1].gridX, 15);
+  });
+
   test('straight run extends by tile length and places N at once', () {
     // Source straight covers x10..14. Extending RIGHT with the same 5-wide
     // straight should step by 5: origins 15, 20, 25, ...
