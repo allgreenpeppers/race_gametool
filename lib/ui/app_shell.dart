@@ -117,7 +117,8 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
       final levelNotifier = ref.read(levelEditorProvider(id).notifier);
       final proceed = await _promptUnsavedChanges(
         title: 'Save Game Map Changes?',
-        content: 'The level "${levelState.mapName}" has unsaved changes. Do you want to save before quitting?',
+        content:
+            'The level "${levelState.mapName}" has unsaved changes. Do you want to save before quitting?',
         onSave: () => levelNotifier.save(),
       );
       if (!proceed) {
@@ -369,7 +370,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
       onTap: onPressed,
       borderRadius: BorderRadius.circular(8),
       child: Container(
-        width: 80,
+        width: 70,
         padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
         decoration: BoxDecoration(
           color: selected
@@ -645,8 +646,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
           // New Game Map: Ctrl+N / Cmd+N
           const SingleActivator(LogicalKeyboardKey.keyN, control: true): () =>
               _handleNewGameMap(ref),
-          const SingleActivator(LogicalKeyboardKey.keyN, meta: true): () =>
-              _handleNewGameMap(ref),
+          const SingleActivator(LogicalKeyboardKey.keyN, meta: true): () => _handleNewGameMap(ref),
 
           // Open Config: Ctrl+Shift+O / Cmd+Shift+O
           const SingleActivator(LogicalKeyboardKey.keyO, control: true, shift: true): () =>
@@ -661,10 +661,8 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
               _handleOpenGameLevel(ref),
 
           // Save: Ctrl+S / Cmd+S
-          const SingleActivator(LogicalKeyboardKey.keyS, control: true): () =>
-              _handleSave(ref),
-          const SingleActivator(LogicalKeyboardKey.keyS, meta: true): () =>
-              _handleSave(ref),
+          const SingleActivator(LogicalKeyboardKey.keyS, control: true): () => _handleSave(ref),
+          const SingleActivator(LogicalKeyboardKey.keyS, meta: true): () => _handleSave(ref),
 
           // Save As: Ctrl+Shift+S / Cmd+Shift+S
           const SingleActivator(LogicalKeyboardKey.keyS, control: true, shift: true): () =>
@@ -680,204 +678,62 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
         },
       },
       child: Scaffold(
-        body: Column(
+        body: Row(
           children: [
-            // Unified Top Toolbar and Window Control Row (Split into 2 Lines)
             Container(
-              color: theme.colorScheme.surfaceContainerHigh,
+              width: 80,
+              color: theme.colorScheme.surfaceContainerLow,
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (defaultTargetPlatform != TargetPlatform.macOS)
-                    Container(
-                      height: 40,
-                      color: theme.colorScheme.surfaceContainerLow,
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Center(child: _buildMenuBar(context, ref)),
-                          Expanded(
-                            child: DragToMoveArea(child: Container(color: Colors.transparent)),
-                          ),
-                          WindowCaptionButton.minimize(
-                            brightness: theme.brightness,
-                            onPressed: windowManager.minimize,
-                          ),
-                          if (_isMaximized)
-                            WindowCaptionButton.unmaximize(
-                              brightness: theme.brightness,
-                              onPressed: windowManager.unmaximize,
-                            )
-                          else
-                            WindowCaptionButton.maximize(
-                              brightness: theme.brightness,
-                              onPressed: windowManager.maximize,
-                            ),
-                          WindowCaptionButton.close(
-                            brightness: theme.brightness,
-                            onPressed: windowManager.close,
-                          ),
-                        ],
-                      ),
-                    ),
-                  // Chrome-style title bar: the browser tab strip lives in the
-                  // window drag region next to the OS window controls. The
-                  // active tab shares the toolbar's colour so it reads as one
-                  // connected surface, with no divider between them.
-                  Container(
-                    height: 40,
-                    color: theme.colorScheme.surfaceContainerLow,
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // macOS spacing to clear the system traffic-light buttons.
-                        if (defaultTargetPlatform == TargetPlatform.macOS)
-                          const SizedBox(width: 78)
-                        else
-                          const SizedBox(width: 8),
-
-                        // Tabs: pinned Phase 1 + one per open level. Shrinks and
-                        // scrolls horizontally when the row runs out of space.
-                        _Phase1TabChip(
-                          selected: activeId == null,
-                          onSelect: () => ref.read(workspaceProvider.notifier).activatePhase1(),
-                        ),
-                        Expanded(
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: Row(
-                              children: [
-                                for (final id in workspace.levelTabs)
-                                  _LevelTabChip(
-                                    key: ValueKey(id),
-                                    id: id,
-                                    selected: activeId == id,
-                                    onSelect: () =>
-                                        ref.read(workspaceProvider.notifier).activateLevelTab(id),
-                                    onClose: () => _handleCloseTab(id),
-                                  ),
-                                Tooltip(
-                                  message: hasAssets
-                                      ? 'New level tab'
-                                      : 'Define or load assets in Phase 1 first',
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(5),
-                                    child: IconButton(
-                                      iconSize: 18,
-                                      visualDensity: VisualDensity.compact,
-                                      icon: const Icon(Icons.add),
-                                      onPressed: hasAssets ? () => _handleNewGameMap(ref) : null,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  // Line 2: Tools and Action buttons (horizontal scrollable row)
-                  Container(
-                    height: 44,
-                    color: theme.colorScheme.surfaceContainerHigh,
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                  const SizedBox(height: 40),
+                  Expanded(
                     child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
+                      child: Column(
                         children: [
                           if (mode == AppMode.assetDefiner) ...[
-                            // Tool SegmentedButton
-                            SegmentedButton<Phase1Tool>(
-                              showSelectedIcon: false,
-                              style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                              segments: [
-                                for (final t in Phase1Tool.values)
-                                  if ((activeCategory == BlockCategory.track) ||
-                                      (activeCategory == BlockCategory.islandTile &&
-                                          t != Phase1Tool.paintMask &&
-                                          t != Phase1Tool.addPort) ||
-                                      (activeCategory == BlockCategory.decoration &&
-                                          t != Phase1Tool.addPort))
-                                    ButtonSegment(
-                                      value: t,
-                                      tooltip: t.label,
-                                      icon: Icon(switch (t) {
-                                        Phase1Tool.select => Icons.near_me_outlined,
-                                        Phase1Tool.move => Icons.open_with,
-                                        Phase1Tool.drawBox => Icons.crop_square,
-                                        Phase1Tool.paintMask => Icons.brush_outlined,
-                                        Phase1Tool.addPort => Icons.adjust,
-                                      }),
-                                    ),
-                              ],
-                              selected: {assetTool},
-                              onSelectionChanged: (selection) =>
-                                  assetNotifier.setTool(selection.first),
-                            ),
-                            const SizedBox(width: 12),
-
-                            // Action Buttons
-                            FilledButton.tonalIcon(
-                              onPressed: assetNotifier.loadImage,
-                              style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
-                              icon: const Icon(Icons.image_outlined, size: 16),
-                              label: Text(!hasActiveImage ? 'Load Image' : 'Replace Image'),
-                            ),
+                            for (final cat in [
+                              BlockCategory.track,
+                              BlockCategory.islandTile,
+                              BlockCategory.decoration,
+                            ]) ...[
+                              _buildSidebarItem(
+                                context,
+                                label: categoryLabel(cat),
+                                selected: activeCategory == cat,
+                                onPressed: () => assetNotifier.setActiveCategory(cat),
+                                icon: switch (cat) {
+                                  BlockCategory.track => Icons.alt_route,
+                                  BlockCategory.islandTile => Icons.landscape,
+                                  BlockCategory.decoration => Icons.park,
+                                  _ => Icons.circle,
+                                },
+                              ),
+                              const SizedBox(height: 12),
+                            ],
+                            // Decoration spans multiple images; list them
+                            // below the categories (behind a divider) so
+                            // the active one can be switched, added, or
+                            // removed.
+                            if (activeCategory == BlockCategory.decoration) ...[
+                              const Divider(indent: 12, endIndent: 12),
+                              const SizedBox(height: 8),
+                              const _DecorationSourceList(),
+                            ],
                           ] else if (mode == AppMode.levelEditor) ...[
-                            // Tool SegmentedButton
-                            SegmentedButton<LevelTool>(
-                              showSelectedIcon: false,
-                              style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                              segments: [
-                                for (final tool in LevelTool.values)
-                                  if ((activeLayer != MapLayer.island &&
-                                          activeLayer != MapLayer.decoration) ||
-                                      (tool != LevelTool.connect && tool != LevelTool.spawn))
-                                    ButtonSegment(
-                                      value: tool,
-                                      tooltip: tool.label,
-                                      icon: Icon(switch (tool) {
-                                        LevelTool.select => Icons.near_me_outlined,
-                                        LevelTool.multi => Icons.select_all,
-                                        LevelTool.stamp => Icons.add_box_outlined,
-                                        LevelTool.connect => Icons.hub_outlined,
-                                        LevelTool.spawn => Icons.flag_outlined,
-                                        LevelTool.erase => Icons.cleaning_services,
-                                      }),
-                                    ),
-                              ],
-                              selected: {levelTool},
-                              onSelectionChanged: (s) => levelNotifier!.setTool(s.first),
-                            ),
-                            const SizedBox(width: 12),
-
-                            // Island Brush Controls
-                            if (activeLayer == MapLayer.island) ...[
-                              const Icon(Icons.brush, size: 16),
-                              const SizedBox(width: 4),
-                              SegmentedButton<int>(
-                                showSelectedIcon: false,
-                                style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                                segments: const [
-                                  ButtonSegment(value: 0, label: Text('1x1')),
-                                  ButtonSegment(value: 1, label: Text('3x3')),
-                                  ButtonSegment(value: 2, label: Text('5x5')),
-                                  ButtonSegment(value: 3, label: Text('7x7')),
-                                ],
-                                selected: {islandBrushRadius},
-                                onSelectionChanged: (s) =>
-                                    levelNotifier!.setIslandBrushRadius(s.first),
+                            for (final layer in MapLayer.values) ...[
+                              _buildSidebarItem(
+                                context,
+                                label: layer.label,
+                                selected: activeLayer == layer,
+                                onPressed: () => levelNotifier!.setLayer(layer),
+                                icon: switch (layer) {
+                                  MapLayer.island => Icons.landscape,
+                                  MapLayer.track => Icons.alt_route,
+                                  MapLayer.decoration => Icons.park,
+                                  MapLayer.function => Icons.settings_suggest,
+                                },
                               ),
-                              const SizedBox(width: 6),
-                              FilledButton.tonalIcon(
-                                onPressed: () => _handleAutotile(activeId!),
-                                style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
-                                icon: const Icon(Icons.grass, size: 16),
-                                label: const Text('Autotile'),
-                              ),
-                              const SizedBox(width: 12),
+                              const SizedBox(height: 12),
                             ],
                           ],
                         ],
@@ -887,67 +743,220 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
                 ],
               ),
             ),
-            const Divider(height: 1),
-
-            // Main View Content
+            const VerticalDivider(width: 1),
             Expanded(
-              child: Row(
+              child: Column(
                 children: [
-                  // Sidebar
+                  // Unified Top Toolbar and Window Control Row (Split into 2 Lines)
                   Container(
-                    width: 90,
-                    color: theme.colorScheme.surfaceContainerLow,
+                    color: theme.colorScheme.surfaceContainerHigh,
                     child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const SizedBox(height: 16),
-                        Expanded(
+                        if (defaultTargetPlatform != TargetPlatform.macOS)
+                          Container(
+                            height: 40,
+                            color: theme.colorScheme.surfaceContainerLow,
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Center(child: _buildMenuBar(context, ref)),
+                                Expanded(
+                                  child: DragToMoveArea(
+                                    child: Container(color: Colors.transparent),
+                                  ),
+                                ),
+                                WindowCaptionButton.minimize(
+                                  brightness: theme.brightness,
+                                  onPressed: windowManager.minimize,
+                                ),
+                                if (_isMaximized)
+                                  WindowCaptionButton.unmaximize(
+                                    brightness: theme.brightness,
+                                    onPressed: windowManager.unmaximize,
+                                  )
+                                else
+                                  WindowCaptionButton.maximize(
+                                    brightness: theme.brightness,
+                                    onPressed: windowManager.maximize,
+                                  ),
+                                WindowCaptionButton.close(
+                                  brightness: theme.brightness,
+                                  onPressed: windowManager.close,
+                                ),
+                              ],
+                            ),
+                          ),
+                        // Chrome-style title bar: the browser tab strip lives in the
+                        // window drag region next to the OS window controls. The
+                        // active tab shares the toolbar's colour so it reads as one
+                        // connected surface, with no divider between them.
+                        Container(
+                          height: 40,
+                          color: theme.colorScheme.surfaceContainerLow,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const SizedBox(width: 8),
+
+                              // Tabs: pinned Phase 1 + one per open level. Shrinks
+                              // when the row runs out of space, leaving a drag area.
+                              _Phase1TabChip(
+                                selected: activeId == null,
+                                onSelect: () =>
+                                    ref.read(workspaceProvider.notifier).activatePhase1(),
+                              ),
+                              Flexible(
+                                flex: 10,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    for (final id in workspace.levelTabs)
+                                      Flexible(
+                                        flex: activeId == id ? 3 : 1,
+                                        child: _LevelTabChip(
+                                          key: ValueKey(id),
+                                          id: id,
+                                          selected: activeId == id,
+                                          onSelect: () => ref
+                                              .read(workspaceProvider.notifier)
+                                              .activateLevelTab(id),
+                                          onClose: () => _handleCloseTab(id),
+                                        ),
+                                      ),
+                                    Tooltip(
+                                      message: hasAssets
+                                          ? 'New level tab'
+                                          : 'Define or load assets in Phase 1 first',
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(5),
+                                        child: IconButton(
+                                          iconSize: 18,
+                                          visualDensity: VisualDensity.compact,
+                                          icon: const Icon(Icons.add),
+                                          onPressed: hasAssets
+                                              ? () => _handleNewGameMap(ref)
+                                              : null,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Expanded(
+                                flex: 1,
+                                child: DragToMoveArea(child: Container(color: Colors.transparent)),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        // Line 2: Tools and Action buttons (horizontal scrollable row)
+                        Container(
+                          height: 44,
+                          color: theme.colorScheme.surfaceContainerHigh,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
                           child: SingleChildScrollView(
-                            child: Column(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
                               children: [
                                 if (mode == AppMode.assetDefiner) ...[
-                                  for (final cat in [
-                                    BlockCategory.track,
-                                    BlockCategory.islandTile,
-                                    BlockCategory.decoration,
-                                  ]) ...[
-                                    _buildSidebarItem(
-                                      context,
-                                      label: categoryLabel(cat),
-                                      selected: activeCategory == cat,
-                                      onPressed: () => assetNotifier.setActiveCategory(cat),
-                                      icon: switch (cat) {
-                                        BlockCategory.track => Icons.alt_route,
-                                        BlockCategory.islandTile => Icons.landscape,
-                                        BlockCategory.decoration => Icons.park,
-                                        _ => Icons.circle,
-                                      },
+                                  // Tool SegmentedButton
+                                  SegmentedButton<Phase1Tool>(
+                                    showSelectedIcon: false,
+                                    style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                                    segments: [
+                                      for (final t in Phase1Tool.values)
+                                        if ((activeCategory == BlockCategory.track) ||
+                                            (activeCategory == BlockCategory.islandTile &&
+                                                t != Phase1Tool.paintMask &&
+                                                t != Phase1Tool.addPort) ||
+                                            (activeCategory == BlockCategory.decoration &&
+                                                t != Phase1Tool.addPort))
+                                          ButtonSegment(
+                                            value: t,
+                                            tooltip: t.label,
+                                            icon: Icon(switch (t) {
+                                              Phase1Tool.select => Icons.near_me_outlined,
+                                              Phase1Tool.move => Icons.open_with,
+                                              Phase1Tool.drawBox => Icons.crop_square,
+                                              Phase1Tool.paintMask => Icons.brush_outlined,
+                                              Phase1Tool.addPort => Icons.adjust,
+                                            }),
+                                          ),
+                                    ],
+                                    selected: {assetTool},
+                                    onSelectionChanged: (selection) =>
+                                        assetNotifier.setTool(selection.first),
+                                  ),
+                                  const SizedBox(width: 12),
+
+                                  // Action Buttons
+                                  FilledButton.tonalIcon(
+                                    onPressed: assetNotifier.loadImage,
+                                    style: FilledButton.styleFrom(
+                                      visualDensity: VisualDensity.compact,
                                     ),
-                                    const SizedBox(height: 12),
-                                  ],
-                                  // Decoration spans multiple images; list them
-                                  // below the categories (behind a divider) so
-                                  // the active one can be switched, added, or
-                                  // removed.
-                                  if (activeCategory == BlockCategory.decoration) ...[
-                                    const Divider(indent: 12, endIndent: 12),
-                                    const SizedBox(height: 8),
-                                    const _DecorationSourceList(),
-                                  ],
+                                    icon: const Icon(Icons.image_outlined, size: 16),
+                                    label: Text(!hasActiveImage ? 'Load Image' : 'Replace Image'),
+                                  ),
                                 ] else if (mode == AppMode.levelEditor) ...[
-                                  for (final layer in MapLayer.values) ...[
-                                    _buildSidebarItem(
-                                      context,
-                                      label: layer.label,
-                                      selected: activeLayer == layer,
-                                      onPressed: () => levelNotifier!.setLayer(layer),
-                                      icon: switch (layer) {
-                                        MapLayer.island => Icons.landscape,
-                                        MapLayer.track => Icons.alt_route,
-                                        MapLayer.decoration => Icons.park,
-                                        MapLayer.function => Icons.settings_suggest,
-                                      },
+                                  // Tool SegmentedButton
+                                  SegmentedButton<LevelTool>(
+                                    showSelectedIcon: false,
+                                    style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                                    segments: [
+                                      for (final tool in LevelTool.values)
+                                        if ((activeLayer != MapLayer.island &&
+                                                activeLayer != MapLayer.decoration) ||
+                                            (tool != LevelTool.connect && tool != LevelTool.spawn))
+                                          ButtonSegment(
+                                            value: tool,
+                                            tooltip: tool.label,
+                                            icon: Icon(switch (tool) {
+                                              LevelTool.select => Icons.near_me_outlined,
+                                              LevelTool.multi => Icons.select_all,
+                                              LevelTool.stamp => Icons.add_box_outlined,
+                                              LevelTool.connect => Icons.hub_outlined,
+                                              LevelTool.spawn => Icons.flag_outlined,
+                                              LevelTool.erase => Icons.cleaning_services,
+                                            }),
+                                          ),
+                                    ],
+                                    selected: {levelTool},
+                                    onSelectionChanged: (s) => levelNotifier!.setTool(s.first),
+                                  ),
+                                  const SizedBox(width: 12),
+
+                                  // Island Brush Controls
+                                  if (activeLayer == MapLayer.island) ...[
+                                    const Icon(Icons.brush, size: 16),
+                                    const SizedBox(width: 4),
+                                    SegmentedButton<int>(
+                                      showSelectedIcon: false,
+                                      style: const ButtonStyle(
+                                        visualDensity: VisualDensity.compact,
+                                      ),
+                                      segments: const [
+                                        ButtonSegment(value: 0, label: Text('1x1')),
+                                        ButtonSegment(value: 1, label: Text('3x3')),
+                                        ButtonSegment(value: 2, label: Text('5x5')),
+                                        ButtonSegment(value: 3, label: Text('7x7')),
+                                      ],
+                                      selected: {islandBrushRadius},
+                                      onSelectionChanged: (s) =>
+                                          levelNotifier!.setIslandBrushRadius(s.first),
                                     ),
-                                    const SizedBox(height: 12),
+                                    const SizedBox(width: 6),
+                                    FilledButton.tonalIcon(
+                                      onPressed: () => _handleAutotile(activeId!),
+                                      style: FilledButton.styleFrom(
+                                        visualDensity: VisualDensity.compact,
+                                      ),
+                                      icon: const Icon(Icons.grass, size: 16),
+                                      label: const Text('Autotile'),
+                                    ),
+                                    const SizedBox(width: 12),
                                   ],
                                 ],
                               ],
@@ -957,50 +966,52 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
                       ],
                     ),
                   ),
-                  const VerticalDivider(width: 1),
+                  const Divider(height: 1),
+
+                  // Main View Content
                   Expanded(
                     child: activeId == null
                         ? const AssetDefinerPage()
                         : LevelEditorPage(key: ValueKey(activeId), tabId: activeId),
                   ),
-                ],
-              ),
-            ),
-            const Divider(height: 1),
+                  const Divider(height: 1),
 
-            // Desktop IDE-Style bottom Status Bar
-            Container(
-              height: 22,
-              color: theme.colorScheme.surfaceContainerLow,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      mode == AppMode.assetDefiner
-                          ? (assetStatusMessage ?? 'Asset Definer ready')
-                          : (levelStatusMessage ?? 'Level Editor ready'),
-                      style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
-                      overflow: TextOverflow.ellipsis,
+                  // Desktop IDE-Style bottom Status Bar
+                  Container(
+                    height: 22,
+                    color: theme.colorScheme.surfaceContainerLow,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            mode == AppMode.assetDefiner
+                                ? (assetStatusMessage ?? 'Asset Definer ready')
+                                : (levelStatusMessage ?? 'Level Editor ready'),
+                            style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (mode == AppMode.levelEditor) ...[
+                          Text(
+                            '$placementsLength blocks placed',
+                            style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
+                          ),
+                          const SizedBox(width: 16),
+                          if (hasSpawn)
+                            const Text(
+                              'Spawn set',
+                              style: TextStyle(color: Colors.greenAccent, fontSize: 11),
+                            )
+                          else
+                            const Text(
+                              'No Spawn',
+                              style: TextStyle(color: Colors.orangeAccent, fontSize: 11),
+                            ),
+                        ],
+                      ],
                     ),
                   ),
-                  if (mode == AppMode.levelEditor) ...[
-                    Text(
-                      '$placementsLength blocks placed',
-                      style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
-                    ),
-                    const SizedBox(width: 16),
-                    if (hasSpawn)
-                      const Text(
-                        'Spawn set',
-                        style: TextStyle(color: Colors.greenAccent, fontSize: 11),
-                      )
-                    else
-                      const Text(
-                        'No Spawn',
-                        style: TextStyle(color: Colors.orangeAccent, fontSize: 11),
-                      ),
-                  ],
                 ],
               ),
             ),
@@ -1089,10 +1100,10 @@ class _AddDecorationButton extends StatelessWidget {
         onTap: onTap,
         customBorder: const CircleBorder(),
         child: Container(
-          width: 54,
+          width: 70,
           height: 54,
           decoration: BoxDecoration(
-            shape: BoxShape.circle,
+            borderRadius: .circular(8),
             border: Border.all(color: color.withValues(alpha: 0.6)),
           ),
           child: Column(
@@ -1129,7 +1140,7 @@ class _DecorationSourceTile extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(6),
       child: Container(
-        width: 80,
+        width: 70,
         margin: const EdgeInsets.only(bottom: 4),
         padding: const EdgeInsets.only(left: 8, right: 2, top: 4, bottom: 4),
         decoration: BoxDecoration(
@@ -1264,42 +1275,55 @@ class _TabChip extends StatelessWidget {
             right: BorderSide(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.4)),
           ),
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 15, color: fg),
-            const SizedBox(width: 6),
-            Flexible(
-              child: Text(
-                label,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: fg,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth;
+
+            // Dynamically hide elements based on available width to prevent overflow
+            final showIcon = width > 50;
+            final showClose = onClose != null && width > 35;
+            final showDirty = dirty && width > 70;
+
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (showIcon) ...[
+                  Icon(icon, size: 15, color: fg),
+                  const SizedBox(width: 6),
+                ],
+                Flexible(
+                  child: Text(
+                    label,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: fg,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                    ),
+                  ),
                 ),
-              ),
-            ),
-            if (dirty) ...[
-              const SizedBox(width: 6),
-              Container(
-                width: 7,
-                height: 7,
-                decoration: BoxDecoration(color: fg, shape: BoxShape.circle),
-              ),
-            ],
-            if (onClose != null) ...[
-              const SizedBox(width: 2),
-              IconButton(
-                iconSize: 14,
-                visualDensity: VisualDensity.compact,
-                padding: const EdgeInsets.all(4),
-                constraints: const BoxConstraints(),
-                tooltip: 'Close tab',
-                icon: const Icon(Icons.close),
-                onPressed: onClose,
-              ),
-            ],
-          ],
+                if (dirty && showDirty) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(color: fg, shape: BoxShape.circle),
+                  ),
+                ],
+                if (onClose != null && showClose) ...[
+                  const SizedBox(width: 2),
+                  IconButton(
+                    iconSize: 14,
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.all(4),
+                    constraints: const BoxConstraints(),
+                    tooltip: 'Close tab',
+                    icon: const Icon(Icons.close),
+                    onPressed: onClose,
+                  ),
+                ],
+              ],
+            );
+          },
         ),
       ),
     );
