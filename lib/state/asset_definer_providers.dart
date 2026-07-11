@@ -71,6 +71,9 @@ class AssetDefinerState {
   const AssetDefinerState({
     this.images = const {},
     this.masksByCategory = const {},
+    this.decorationSources = const [],
+    this.decorationMasks = const [],
+    this.activeDecorationIndex = 0,
     this.activeCategory = BlockCategory.track,
     this.selectedIndex,
     this.tool = Phase1Tool.drawBox,
@@ -82,11 +85,26 @@ class AssetDefinerState {
     this.currentFilePath,
   });
 
-  /// One source image per category (only those that have been loaded).
+  /// One source image per single-image category (track, island, ...). The
+  /// decoration category is multi-image and lives in [decorationSources]
+  /// instead, so this map never holds a decoration entry.
   final Map<BlockCategory, CategoryImage> images;
 
-  /// Masks per category. Each category is authored on its own image.
+  /// Masks for the single-image categories, keyed by category. Decoration
+  /// masks live in [decorationMasks] (one list per decoration image).
   final Map<BlockCategory, List<MaskDraft>> masksByCategory;
+
+  /// Decoration is authored across several images. These are the loaded
+  /// decoration images, in display order.
+  final List<CategoryImage> decorationSources;
+
+  /// Masks per decoration image, parallel to [decorationSources]. Kept
+  /// separate in Phase 1 (each authored on its own image); all merged into
+  /// one sprite dictionary on export.
+  final List<List<MaskDraft>> decorationMasks;
+
+  /// Which decoration image is currently being edited.
+  final int activeDecorationIndex;
 
   /// The category currently being edited (drives the visible image + masks).
   final BlockCategory activeCategory;
@@ -111,28 +129,62 @@ class AssetDefinerState {
 
   // --- Active-category views (keep the rest of the editor unchanged) --------
 
-  CategoryImage? get activeImage => images[activeCategory];
+  bool get _isDecoration => activeCategory == BlockCategory.decoration;
+
+  /// The active decoration index clamped to a valid slot, or null when there
+  /// are no decoration images loaded.
+  int? get _decorationSlot => decorationSources.isEmpty
+      ? null
+      : activeDecorationIndex.clamp(0, decorationSources.length - 1);
+
+  CategoryImage? get activeImage {
+    if (_isDecoration) {
+      final slot = _decorationSlot;
+      return slot == null ? null : decorationSources[slot];
+    }
+    return images[activeCategory];
+  }
+
   Uint8List? get imageBytes => activeImage?.bytes;
   ui.Image? get image => activeImage?.image;
   String? get imageName => activeImage?.name;
 
-  /// Masks of the active category (what the canvas edits).
-  List<MaskDraft> get masks => masksByCategory[activeCategory] ?? const [];
+  /// Masks of the active editing target (the active category, or the active
+  /// decoration image), i.e. what the canvas edits.
+  List<MaskDraft> get masks {
+    if (_isDecoration) {
+      final slot = _decorationSlot;
+      return slot == null || slot >= decorationMasks.length
+          ? const []
+          : decorationMasks[slot];
+    }
+    return masksByCategory[activeCategory] ?? const [];
+  }
 
   MaskDraft? get selectedMask =>
       selectedIndex == null ? null : masks[selectedIndex!];
 
-  /// All masks across every category, for export.
-  List<MaskDraft> get allMasks =>
-      [for (final c in BlockCategory.values) ...?masksByCategory[c]];
+  /// All masks across every category and every decoration image, for export.
+  List<MaskDraft> get allMasks => [
+        for (final c in BlockCategory.values)
+          if (c != BlockCategory.decoration) ...?masksByCategory[c],
+        for (final list in decorationMasks) ...list,
+      ];
 
-  bool get canExport => BlockCategory.values.any((c) =>
-      images[c] != null && (masksByCategory[c]?.isNotEmpty ?? false));
+  bool get canExport =>
+      BlockCategory.values.any((c) =>
+          c != BlockCategory.decoration &&
+          images[c] != null &&
+          (masksByCategory[c]?.isNotEmpty ?? false)) ||
+      decorationMasks.any((m) => m.isNotEmpty);
 
   AssetDefinerState copyWith({
     Map<BlockCategory, CategoryImage>? images,
     Map<BlockCategory, List<MaskDraft>>? masksByCategory,
     List<MaskDraft>? masks,
+    List<CategoryImage>? decorationSources,
+    List<List<MaskDraft>>? decorationMasks,
+    int? activeDecorationIndex,
     BlockCategory? activeCategory,
     int? Function()? selectedIndex,
     Phase1Tool? tool,
@@ -144,14 +196,27 @@ class AssetDefinerState {
     String? Function()? currentFilePath,
   }) {
     final category = activeCategory ?? this.activeCategory;
-    var nextMasks = masksByCategory ?? this.masksByCategory;
-    // The `masks` convenience param writes to the active category's list.
+    final decIndex = activeDecorationIndex ?? this.activeDecorationIndex;
+    var nextMasksByCategory = masksByCategory ?? this.masksByCategory;
+    var nextDecorationMasks = decorationMasks ?? this.decorationMasks;
+    // The `masks` convenience param writes to the active editing target: the
+    // active decoration image when decoration is active, else the active
+    // category's list.
     if (masks != null) {
-      nextMasks = {...nextMasks, category: masks};
+      if (category == BlockCategory.decoration) {
+        if (decIndex >= 0 && decIndex < nextDecorationMasks.length) {
+          nextDecorationMasks = [...nextDecorationMasks]..[decIndex] = masks;
+        }
+      } else {
+        nextMasksByCategory = {...nextMasksByCategory, category: masks};
+      }
     }
     return AssetDefinerState(
       images: images ?? this.images,
-      masksByCategory: nextMasks,
+      masksByCategory: nextMasksByCategory,
+      decorationSources: decorationSources ?? this.decorationSources,
+      decorationMasks: nextDecorationMasks,
+      activeDecorationIndex: decIndex,
       activeCategory: category,
       selectedIndex:
           selectedIndex != null ? selectedIndex() : this.selectedIndex,
@@ -188,23 +253,37 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
     );
   }
 
-  /// Loads (or replaces) the image for the active category, keeping that
-  /// category's existing masks. Replaces the old separate Load + Swap: a
-  /// category with no image yet just gets one; re-loading updates the art
-  /// and reports any masks that fall outside a smaller image.
-  Future<void> loadImage() async {
+  /// Prompts for an image file and decodes it. Returns null if cancelled.
+  Future<(Uint8List bytes, ui.Image image, String name)?> _pickImage() async {
     final result = await FilePicker.pickFiles(
       dialogTitle: 'Load image for ${state.activeCategory.jsonValue}',
       type: FileType.image,
       withData: true,
     );
     final bytes = result?.files.single.bytes;
-    if (bytes == null) return;
-
+    if (bytes == null) return null;
     final completer = Completer<ui.Image>();
     ui.decodeImageFromList(bytes, completer.complete);
     final image = await completer.future;
-    final name = result!.files.single.name;
+    return (bytes, image, result!.files.single.name);
+  }
+
+  /// Loads (or replaces) the image for the active editing target, keeping its
+  /// existing masks. For a single-image category this updates that category's
+  /// art; for decoration it replaces the active decoration image (or, when
+  /// none exists yet, adds the first one). Reports masks that fall outside a
+  /// smaller image.
+  Future<void> loadImage() async {
+    // Decoration with nothing loaded yet: the first "Load" simply adds one.
+    if (state.activeCategory == BlockCategory.decoration &&
+        state.decorationSources.isEmpty) {
+      await addDecorationImage();
+      return;
+    }
+
+    final picked = await _pickImage();
+    if (picked == null) return;
+    final (bytes, image, name) = picked;
 
     final hadImage = state.activeImage != null;
     final cols = (image.width / GridConstants.cellSize).ceil();
@@ -215,23 +294,97 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
         .map((m) => m.id)
         .toList();
 
+    final statusMessage = !hadImage
+        ? 'Loaded $name (${image.width} x ${image.height} px)'
+        : outOfBounds.isEmpty
+            ? 'Replaced image with $name, kept ${state.masks.length} blocks'
+            : 'Replaced image; ${outOfBounds.length} block(s) now out of '
+                'bounds: ${outOfBounds.join(', ')}';
+
+    final newImage = CategoryImage(bytes: bytes, image: image, name: name);
+    if (state.activeCategory == BlockCategory.decoration) {
+      final slot = state.activeDecorationIndex;
+      final newSources = [...state.decorationSources]..[slot] = newImage;
+      state = state.copyWith(
+        decorationSources: newSources,
+        tool: Phase1Tool.drawBox,
+        dragPreview: () => null,
+        paintPreview: () => null,
+        movePreview: () => null,
+        isDirty: true,
+        statusMessage: () => statusMessage,
+      );
+    } else {
+      state = state.copyWith(
+        images: {...state.images, state.activeCategory: newImage},
+        tool: Phase1Tool.drawBox,
+        dragPreview: () => null,
+        paintPreview: () => null,
+        movePreview: () => null,
+        isDirty: true,
+        statusMessage: () => statusMessage,
+      );
+    }
+  }
+
+  /// Adds a new decoration image and makes it the active one. Decoration is
+  /// authored across multiple images that all merge on export.
+  Future<void> addDecorationImage() async {
+    final picked = await _pickImage();
+    if (picked == null) return;
+    final (bytes, image, name) = picked;
+
+    final newSources = [
+      ...state.decorationSources,
+      CategoryImage(bytes: bytes, image: image, name: name),
+    ];
+    final newMasks = [...state.decorationMasks, <MaskDraft>[]];
     state = state.copyWith(
-      images: {
-        ...state.images,
-        state.activeCategory:
-            CategoryImage(bytes: bytes, image: image, name: name),
-      },
+      decorationSources: newSources,
+      decorationMasks: newMasks,
+      activeCategory: BlockCategory.decoration,
+      activeDecorationIndex: newSources.length - 1,
+      selectedIndex: () => null,
       tool: Phase1Tool.drawBox,
       dragPreview: () => null,
       paintPreview: () => null,
       movePreview: () => null,
       isDirty: true,
-      statusMessage: () => !hadImage
-          ? 'Loaded $name (${image.width} x ${image.height} px)'
-          : outOfBounds.isEmpty
-              ? 'Replaced image with $name, kept ${state.masks.length} blocks'
-              : 'Replaced image; ${outOfBounds.length} block(s) now out of '
-                  'bounds: ${outOfBounds.join(', ')}',
+      statusMessage: () => 'Added decoration image $name',
+    );
+  }
+
+  void setActiveDecorationIndex(int index) {
+    if (index < 0 || index >= state.decorationSources.length) return;
+    state = state.copyWith(
+      activeCategory: BlockCategory.decoration,
+      activeDecorationIndex: index,
+      selectedIndex: () => null,
+      dragPreview: () => null,
+      paintPreview: () => null,
+      movePreview: () => null,
+      statusMessage: () => 'Editing ${state.decorationSources[index].name}',
+    );
+  }
+
+  void removeDecorationImage(int index) {
+    if (index < 0 || index >= state.decorationSources.length) return;
+    final newSources = [...state.decorationSources]..removeAt(index);
+    final newMasks = [...state.decorationMasks];
+    if (index < newMasks.length) newMasks.removeAt(index);
+    var newActive = state.activeDecorationIndex;
+    if (newActive >= newSources.length) newActive = newSources.length - 1;
+    if (newActive < 0) newActive = 0;
+    state = state.copyWith(
+      decorationSources: newSources,
+      decorationMasks: newMasks,
+      activeDecorationIndex: newActive,
+      selectedIndex: () => null,
+      dragPreview: () => null,
+      paintPreview: () => null,
+      movePreview: () => null,
+      isDirty: true,
+      statusMessage: () => 'Removed decoration image',
     );
   }
 
@@ -626,6 +779,40 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
 
   // --- Bundle save / open ---------------------------------------------------
 
+  /// Collects the draft images that have masks into bundle sources: one per
+  /// single-image category, plus one per non-empty decoration image. Their
+  /// masks all merge into a single sprite dictionary on write.
+  List<BundleSource> _collectSources() {
+    final sources = <BundleSource>[];
+    for (final c in BlockCategory.values) {
+      if (c == BlockCategory.decoration) continue;
+      final catImage = state.images[c];
+      final catMasks = state.masksByCategory[c];
+      if (catImage != null && catMasks != null && catMasks.isNotEmpty) {
+        sources.add(BundleSource(
+          category: c,
+          name: catImage.name,
+          imageBytes: catImage.bytes,
+          masks: catMasks,
+        ));
+      }
+    }
+    for (var i = 0; i < state.decorationSources.length; i++) {
+      final masks = i < state.decorationMasks.length
+          ? state.decorationMasks[i]
+          : const <MaskDraft>[];
+      if (masks.isEmpty) continue;
+      final img = state.decorationSources[i];
+      sources.add(BundleSource(
+        category: BlockCategory.decoration,
+        name: img.name,
+        imageBytes: img.bytes,
+        masks: masks,
+      ));
+    }
+    return sources;
+  }
+
   void newConfig() {
     _nextBlockNumber = 1;
     _dragAnchor = null;
@@ -654,22 +841,11 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       return;
     }
 
-    // Collect per-category raw images for the multi-source export.
-    final categoryImages = <BlockCategory, Uint8List>{};
-    for (final c in BlockCategory.values) {
-      final catImage = state.images[c];
-      final catMasks = state.masksByCategory[c];
-      if (catImage != null && catMasks != null && catMasks.isNotEmpty) {
-        categoryImages[c] = catImage.bytes;
-      }
-    }
-
     final Uint8List bundleBytes;
     try {
       bundleBytes = writeAssetBundle(
-        categoryImages: categoryImages,
+        sources: _collectSources(),
         imageName: state.imageName ?? 'draft.png',
-        masks: state.allMasks,
       );
     } on Object catch (e) {
       state = state.copyWith(statusMessage: () => 'Save failed: $e');
@@ -720,22 +896,11 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       return;
     }
 
-    // Collect per-category raw images for the multi-source export.
-    final categoryImages = <BlockCategory, Uint8List>{};
-    for (final c in BlockCategory.values) {
-      final catImage = state.images[c];
-      final catMasks = state.masksByCategory[c];
-      if (catImage != null && catMasks != null && catMasks.isNotEmpty) {
-        categoryImages[c] = catImage.bytes;
-      }
-    }
-
     final Uint8List bundleBytes;
     try {
       bundleBytes = writeAssetBundle(
-        categoryImages: categoryImages,
+        sources: _collectSources(),
         imageName: state.imageName ?? 'draft.png',
-        masks: state.allMasks,
       );
     } on Object catch (e) {
       state = state.copyWith(statusMessage: () => 'Save failed: $e');
@@ -798,6 +963,12 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
     await _loadBundleBytes(bytes, sourceName: path.split('/').last, filePath: path);
   }
 
+  Future<ui.Image> _decode(Uint8List bytes) async {
+    final completer = Completer<ui.Image>();
+    ui.decodeImageFromList(bytes, completer.complete);
+    return completer.future;
+  }
+
   Future<void> _loadBundleBytes(
     Uint8List bytes, {
     required String sourceName,
@@ -811,46 +982,82 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       return;
     }
 
-    // Decode the raw source image for the canvas editor.
-    final completer = Completer<ui.Image>();
-    ui.decodeImageFromList(data.rawImageBytes, completer.complete);
-    final image = await completer.future;
+    final fallbackImage = await _decode(data.rawImageBytes);
 
-    // Group masks by category and build per-category image map.
-    // When opening a v1 bundle, all masks share the same source image.
-    // We assign each category's masks to the shared raw source image.
+    // Group the single-image categories' masks (decoration is handled
+    // separately below since it can span several images).
     final groupedMasks = <BlockCategory, List<MaskDraft>>{};
     for (final mask in data.masks) {
+      if (mask.category == BlockCategory.decoration) continue;
       groupedMasks.putIfAbsent(mask.category, () => []).add(mask);
     }
+
     final images = <BlockCategory, CategoryImage>{};
-    // Also decode per-category images if the bundle provides them.
     if (data.categoryRawImages.isNotEmpty) {
       for (final entry in data.categoryRawImages.entries) {
-        final c = Completer<ui.Image>();
-        ui.decodeImageFromList(entry.value, c.complete);
+        if (entry.key == BlockCategory.decoration) continue;
         images[entry.key] = CategoryImage(
           bytes: entry.value,
-          image: await c.future,
+          image: await _decode(entry.value),
           name: data.imageName,
         );
       }
     } else {
-      // Legacy single-image bundle: share the raw source across all
-      // categories that have masks.
+      // Legacy single-image bundle: share the raw source across the
+      // non-decoration categories that have masks.
       for (final cat in groupedMasks.keys) {
         images[cat] = CategoryImage(
           bytes: data.rawImageBytes,
-          image: image,
+          image: fallbackImage,
           name: data.imageName,
         );
       }
     }
 
+    // Restore each decoration image and its masks separately.
+    final decorationSources = <CategoryImage>[];
+    final decorationMasks = <List<MaskDraft>>[];
+    if (data.decorationSources.isNotEmpty) {
+      for (final src in data.decorationSources) {
+        decorationSources.add(CategoryImage(
+          bytes: src.imageBytes,
+          image: await _decode(src.imageBytes),
+          name: src.name,
+        ));
+        decorationMasks.add(src.masks);
+      }
+    } else {
+      // v1/v2 back-compat: all decoration masks share a single image.
+      final decoMasks = [
+        for (final m in data.masks)
+          if (m.category == BlockCategory.decoration) m,
+      ];
+      if (decoMasks.isNotEmpty) {
+        final decoBytes = data.categoryRawImages[BlockCategory.decoration] ??
+            data.rawImageBytes;
+        decorationSources.add(CategoryImage(
+          bytes: decoBytes,
+          image: identical(decoBytes, data.rawImageBytes)
+              ? fallbackImage
+              : await _decode(decoBytes),
+          name: data.imageName,
+        ));
+        decorationMasks.add(decoMasks);
+      }
+    }
+
+    final initialCategory = groupedMasks.keys.isNotEmpty
+        ? groupedMasks.keys.first
+        : (decorationSources.isNotEmpty
+            ? BlockCategory.decoration
+            : BlockCategory.track);
+
     state = AssetDefinerState(
       images: images,
       masksByCategory: groupedMasks,
-      activeCategory: groupedMasks.keys.isNotEmpty ? groupedMasks.keys.first : BlockCategory.track,
+      decorationSources: decorationSources,
+      decorationMasks: decorationMasks,
+      activeCategory: initialCategory,
       tool: Phase1Tool.select,
       statusMessage: 'Opened $sourceName (${data.masks.length} blocks)',
       isDirty: false,
@@ -889,7 +1096,10 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
   List<String> _findDuplicateIds() {
     final seen = <String>{};
     final duplicates = <String>{};
-    for (final mask in state.masks) {
+    // Every source's masks merge into one dictionary, so ids must be unique
+    // across all categories and every decoration image, not just the active
+    // editing target.
+    for (final mask in state.allMasks) {
       if (!seen.add(mask.id)) duplicates.add(mask.id);
     }
     return duplicates.toList();

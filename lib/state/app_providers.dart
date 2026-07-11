@@ -15,16 +15,95 @@ enum AppMode {
   final String label;
 }
 
-/// Currently active top-level mode.
-class AppModeNotifier extends Notifier<AppMode> {
-  @override
-  AppMode build() => AppMode.assetDefiner;
+/// Browser-style workspace: a pinned Phase 1 (Asset Definer) tab plus zero or
+/// more Phase 2 (Level Editor) tabs. Each level tab owns an independent
+/// [LevelEditorState] via the `levelEditorProvider` family, keyed by the tab's
+/// id here. Ids are monotonic so a closed tab's id is never reused, which keeps
+/// stale family instances from being resurrected under a new tab.
+class WorkspaceState {
+  const WorkspaceState({
+    this.levelTabs = const [],
+    this.activeLevelTab,
+    this.nextId = 0,
+  });
 
-  void select(AppMode mode) => state = mode;
+  /// Ids of the open Phase 2 tabs, in display order.
+  final List<int> levelTabs;
+
+  /// The active level tab id, or null when the pinned Phase 1 tab is active.
+  final int? activeLevelTab;
+
+  /// Next id to hand out. Never decremented.
+  final int nextId;
+
+  /// The top-level mode derived from which tab is active.
+  AppMode get mode =>
+      activeLevelTab == null ? AppMode.assetDefiner : AppMode.levelEditor;
+
+  WorkspaceState copyWith({
+    List<int>? levelTabs,
+    int? Function()? activeLevelTab,
+    int? nextId,
+  }) =>
+      WorkspaceState(
+        levelTabs: levelTabs ?? this.levelTabs,
+        activeLevelTab:
+            activeLevelTab != null ? activeLevelTab() : this.activeLevelTab,
+        nextId: nextId ?? this.nextId,
+      );
 }
 
-final appModeProvider =
-    NotifierProvider<AppModeNotifier, AppMode>(AppModeNotifier.new);
+class WorkspaceNotifier extends Notifier<WorkspaceState> {
+  @override
+  WorkspaceState build() => const WorkspaceState();
+
+  /// Opens a new empty level tab and activates it. Returns its id so the
+  /// caller can drive that tab's `levelEditorProvider(id).notifier`.
+  int openLevelTab() {
+    final id = state.nextId;
+    state = state.copyWith(
+      levelTabs: [...state.levelTabs, id],
+      activeLevelTab: () => id,
+      nextId: id + 1,
+    );
+    return id;
+  }
+
+  /// Activates the pinned Phase 1 tab.
+  void activatePhase1() => state = state.copyWith(activeLevelTab: () => null);
+
+  void activateLevelTab(int id) {
+    if (state.levelTabs.contains(id)) {
+      state = state.copyWith(activeLevelTab: () => id);
+    }
+  }
+
+  /// Removes a level tab. When the closed tab was active, focus moves to the
+  /// neighbour that slides into its slot (or Phase 1 if none remain).
+  void closeLevelTab(int id) {
+    final idx = state.levelTabs.indexOf(id);
+    if (idx < 0) return;
+    final remaining = [...state.levelTabs]..removeAt(idx);
+    int? nextActive = state.activeLevelTab;
+    if (state.activeLevelTab == id) {
+      nextActive =
+          remaining.isEmpty ? null : remaining[idx.clamp(0, remaining.length - 1)];
+    }
+    state = state.copyWith(
+      levelTabs: remaining,
+      activeLevelTab: () => nextActive,
+    );
+  }
+
+  /// Closes every level tab and returns to Phase 1. Used when the asset set is
+  /// replaced (New Config), since the open levels reference the old assets.
+  void closeAllLevelTabs() {
+    state = state.copyWith(levelTabs: const [], activeLevelTab: () => null);
+  }
+}
+
+final workspaceProvider =
+    NotifierProvider<WorkspaceNotifier, WorkspaceState>(WorkspaceNotifier.new);
 
 /// The loaded asset set shared across the app: the block dictionary plus
 /// the packed sprite sheet needed to render the blocks. Phase 1 populates

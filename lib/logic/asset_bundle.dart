@@ -18,6 +18,37 @@ class BundleEntries {
   static const spriteDict = 'sprite_dict.json';
 }
 
+/// One draft image written into a bundle: its category, display name, the raw
+/// image bytes, and the masks authored on it. Decoration may contribute
+/// several of these; every other category contributes at most one.
+class BundleSource {
+  const BundleSource({
+    required this.category,
+    required this.name,
+    required this.imageBytes,
+    required this.masks,
+  });
+
+  final BlockCategory category;
+  final String name;
+  final Uint8List imageBytes;
+  final List<MaskDraft> masks;
+}
+
+/// A decoration image read back out of a bundle, paired with the masks that
+/// belong to it, so Phase 1 can restore each decoration image separately.
+class BundleDecorationSource {
+  const BundleDecorationSource({
+    required this.imageBytes,
+    required this.name,
+    required this.masks,
+  });
+
+  final Uint8List imageBytes;
+  final String name;
+  final List<MaskDraft> masks;
+}
+
 /// Everything read back out of a .rgpack. Splits cleanly into the two
 /// audiences: the editor half (rawImageBytes + masks, for re-editing in
 /// Phase 1) and the consumer half (sheetBytes + blocks, for Phase 2 and
@@ -32,6 +63,7 @@ class AssetBundleData {
     required this.blocks,
     required this.cellSize,
     this.categoryRawImages = const {},
+    this.decorationSources = const [],
   });
 
   final Uint8List rawImageBytes;
@@ -42,8 +74,14 @@ class AssetBundleData {
   final List<BlockDef> blocks;
   final int cellSize;
 
-  /// Per-category raw source images. Empty for legacy single-image bundles.
+  /// Per-category raw source images, for the single-image categories
+  /// (everything except decoration). Empty for legacy single-image bundles.
   final Map<BlockCategory, Uint8List> categoryRawImages;
+
+  /// Decoration images, each with its own masks. May hold several entries;
+  /// empty for v1/v2 bundles (their decoration masks arrive via
+  /// [categoryRawImages] and [masks] instead).
+  final List<BundleDecorationSource> decorationSources;
 }
 
 /// The game-ready pair extracted from a bundle: the packed sheet PNG and
@@ -56,32 +94,68 @@ class GameAssets {
 }
 
 /// Builds a .rgpack bundle from the editor state. The packed sprite sheet
-/// and sprite dictionary are generated here from the raw image and masks,
+/// and sprite dictionary are generated here from the raw images and masks,
 /// so the bundle stays the single source of truth: editor data and the
 /// derived game assets are always written together and can never drift.
 ///
-/// [categoryImages] maps each BlockCategory to its raw source image bytes.
-/// Each mask is cropped from the image belonging to its category.
+/// Each [BundleSource] is one draft image; its masks are cropped from it and
+/// merged with every other source's into the single shared sheet. Decoration
+/// may supply several sources, each stored as its own raw image so Phase 1 can
+/// keep them separate on re-open (the game still sees one merged dictionary).
 Uint8List writeAssetBundle({
-  required Map<BlockCategory, Uint8List> categoryImages,
+  required List<BundleSource> sources,
   required String imageName,
-  required List<MaskDraft> masks,
 }) {
-  final export = buildSpriteExportMultiSource(
-    categoryImages: categoryImages,
-    masks: masks,
-  );
+  if (sources.isEmpty) {
+    throw ArgumentError('No sources to export');
+  }
+
+  final export = buildSpriteExportSources([
+    for (final s in sources)
+      ExportSource(imageBytes: s.imageBytes, masks: s.masks),
+  ]);
+
+  // Name each source's raw file. Single-image categories keep a stable
+  // per-category name; decoration numbers each image so they stay distinct.
+  // Decoration masks record their source index so the grouping round-trips.
+  final rawFiles = <String>[];
+  final sourceMeta = <Map<String, dynamic>>[];
+  final maskJson = <Map<String, dynamic>>[];
+  var decoIndex = 0;
+  for (final s in sources) {
+    final String file;
+    int? thisDeco;
+    if (s.category == BlockCategory.decoration) {
+      thisDeco = decoIndex;
+      file = 'raw_source_decoration_$decoIndex.png';
+      decoIndex++;
+    } else {
+      file = 'raw_source_${s.category.jsonValue.toLowerCase()}.png';
+    }
+    rawFiles.add(file);
+    sourceMeta.add({
+      'category': s.category.jsonValue,
+      'name': s.name,
+      'file': file,
+    });
+    for (final m in s.masks) {
+      final mj = m.toJson();
+      if (thisDeco != null) mj['decorationSourceIndex'] = thisDeco;
+      maskJson.add(mj);
+    }
+  }
 
   final editorJson = const JsonEncoder.withIndent('  ').convert({
-    'version': 2,
+    'version': 3,
     'cellSize': GridConstants.cellSize.round(),
     'imageName': imageName,
-    'masks': masks.map((m) => m.toJson()).toList(),
+    'masks': maskJson,
+    'sources': sourceMeta,
   });
 
   final manifestJson = const JsonEncoder.withIndent('  ').convert({
     'format': 'race_gametool.assets',
-    'version': 2,
+    'version': 3,
     'cellSize': GridConstants.cellSize.round(),
     'blockCount': export.blocks.length,
     'entries': {
@@ -92,21 +166,16 @@ Uint8List writeAssetBundle({
     },
   });
 
-  // Use the first available category image as the legacy raw_source.png
-  // for backward compatibility.
-  final fallbackBytes = categoryImages.values.first;
-
   final archive = Archive()
     ..addFile(_textFile(BundleEntries.manifest, manifestJson))
-    ..addFile(_bytesFile(BundleEntries.rawSource, fallbackBytes))
+    // First source doubles as the legacy raw_source.png for older readers.
+    ..addFile(_bytesFile(BundleEntries.rawSource, sources.first.imageBytes))
     ..addFile(_textFile(BundleEntries.editor, editorJson))
     ..addFile(_bytesFile(BundleEntries.spriteSheet, export.pngBytes))
     ..addFile(_textFile(BundleEntries.spriteDict, export.jsonText));
 
-  // Write each category's raw source image under its own filename.
-  for (final entry in categoryImages.entries) {
-    final catFile = 'raw_source_${entry.key.jsonValue.toLowerCase()}.png';
-    archive.addFile(_bytesFile(catFile, entry.value));
+  for (var i = 0; i < sources.length; i++) {
+    archive.addFile(_bytesFile(rawFiles[i], sources[i].imageBytes));
   }
 
   return Uint8List.fromList(ZipEncoder().encodeBytes(archive));
@@ -136,28 +205,66 @@ AssetBundleData readAssetBundle(Uint8List zipBytes) {
   final dictJson = requireText(BundleEntries.spriteDict);
   final parsed = parseSpriteDict(dictJson);
 
-  // Read per-category raw source images if available (v2 bundles).
+  final rawMasks = editor['masks'] as List<dynamic>;
+  final masks = rawMasks
+      .map((m) => MaskDraft.fromJson(m as Map<String, dynamic>))
+      .toList();
+
   final categoryRawImages = <BlockCategory, Uint8List>{};
-  for (final cat in BlockCategory.values) {
-    final catFile = 'raw_source_${cat.jsonValue.toLowerCase()}.png';
-    final bytes = optionalBytes(catFile);
-    if (bytes != null) {
-      categoryRawImages[cat] = bytes;
+  final decorationSources = <BundleDecorationSource>[];
+
+  final sourcesMeta = editor['sources'] as List<dynamic>?;
+  if (sourcesMeta != null) {
+    // v3: each source lists its own raw file. Decoration masks carry a
+    // decorationSourceIndex; group them back onto their source in order.
+    final decoMasksByIndex = <int, List<MaskDraft>>{};
+    for (var i = 0; i < rawMasks.length; i++) {
+      final di = (rawMasks[i] as Map<String, dynamic>)['decorationSourceIndex'];
+      if (di is int) {
+        decoMasksByIndex.putIfAbsent(di, () => []).add(masks[i]);
+      }
+    }
+    var decoIndex = 0;
+    for (final entry in sourcesMeta) {
+      final m = entry as Map<String, dynamic>;
+      final cat = BlockCategory.fromJson(m['category'] as String?);
+      final file = m['file'] as String;
+      final name = m['name'] as String? ?? file;
+      final bytes = optionalBytes(file);
+      if (bytes == null) continue;
+      if (cat == BlockCategory.decoration) {
+        decorationSources.add(BundleDecorationSource(
+          imageBytes: bytes,
+          name: name,
+          masks: decoMasksByIndex[decoIndex] ?? const [],
+        ));
+        decoIndex++;
+      } else {
+        categoryRawImages[cat] = bytes;
+      }
+    }
+  } else {
+    // v1/v2: per-category raw files, at most one image per category.
+    for (final cat in BlockCategory.values) {
+      final catFile = 'raw_source_${cat.jsonValue.toLowerCase()}.png';
+      final bytes = optionalBytes(catFile);
+      if (bytes != null) {
+        categoryRawImages[cat] = bytes;
+      }
     }
   }
 
   return AssetBundleData(
     rawImageBytes: requireBytes(BundleEntries.rawSource),
     imageName: editor['imageName'] as String? ?? 'draft.png',
-    masks: (editor['masks'] as List<dynamic>)
-        .map((m) => MaskDraft.fromJson(m as Map<String, dynamic>))
-        .toList(),
+    masks: masks,
     sheetBytes: requireBytes(BundleEntries.spriteSheet),
     spriteDictJson: dictJson,
     blocks: parsed.blocks,
     cellSize: (editor['cellSize'] as num?)?.round() ??
         GridConstants.cellSize.round(),
     categoryRawImages: categoryRawImages,
+    decorationSources: decorationSources,
   );
 }
 

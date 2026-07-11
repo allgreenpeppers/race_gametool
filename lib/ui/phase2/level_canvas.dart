@@ -17,7 +17,11 @@ import '../widgets/port_marker.dart';
 /// which palette blocks are stamped. Renders placed sprites from the packed
 /// sheet, their ports, the selection highlight, and a stamp ghost preview.
 class LevelCanvas extends ConsumerStatefulWidget {
-  const LevelCanvas({super.key});
+  const LevelCanvas({super.key, required this.tabId});
+
+  /// Which workspace tab (and thus which `levelEditorProvider` instance) this
+  /// canvas edits.
+  final int tabId;
 
   /// Canvas size in grid cells. Large enough to lay out a full track;
   /// InteractiveViewer pans and zooms within it.
@@ -131,9 +135,9 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
 
   @override
   Widget build(BuildContext context) {
-    final state = ref.watch(levelEditorProvider);
+    final state = ref.watch(levelEditorProvider(widget.tabId));
     final library = ref.watch(assetLibraryProvider);
-    final notifier = ref.read(levelEditorProvider.notifier);
+    final notifier = ref.read(levelEditorProvider(widget.tabId).notifier);
     // Stamp/erase paint on drag; Multi drags to marquee-select or move the
     // selection. Select and Connect leave drags to InteractiveViewer to pan.
     final usesDrag = state.tool == LevelTool.stamp ||

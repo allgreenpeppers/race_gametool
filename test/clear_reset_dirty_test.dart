@@ -39,7 +39,7 @@ void main() {
         .read(assetLibraryProvider.notifier)
         .setAssets(blocks: _mockBlockDefs(), sheetBytes: Uint8List(0), sheetImage: image);
     assetNotifier = container.read(assetDefinerProvider.notifier);
-    levelNotifier = container.read(levelEditorProvider.notifier);
+    levelNotifier = container.read(levelEditorProvider(0).notifier);
   });
 
   tearDown(() {
@@ -68,7 +68,7 @@ void main() {
 
   group('Phase 2 (Level Editor) Layer Clear & File Operations', () {
     test('initial state is not dirty and has no current path', () {
-      final state = container.read(levelEditorProvider);
+      final state = container.read(levelEditorProvider(0));
       expect(state.isDirty, isFalse);
       expect(state.currentFilePath, isNull);
     });
@@ -86,14 +86,14 @@ void main() {
       levelNotifier.selectPalette('island_tile');
       levelNotifier.stampAt(2, 2);
 
-      var state = container.read(levelEditorProvider);
+      var state = container.read(levelEditorProvider(0));
       expect(state.placements.length, 2);
       expect(state.isDirty, isTrue);
 
       // Clear island layer
       levelNotifier.clearLayer(MapLayer.island);
 
-      state = container.read(levelEditorProvider);
+      state = container.read(levelEditorProvider(0));
       expect(state.placements.length, 1);
       expect(state.placements.first.blockId, 'track_straight');
     });
@@ -103,27 +103,14 @@ void main() {
       levelNotifier.setIslandBrushRadius(0);
       levelNotifier.paintGrassAt(5, 5, erase: false);
 
-      var state = container.read(levelEditorProvider);
+      var state = container.read(levelEditorProvider(0));
       expect(state.islandGrassMask, isNotNull);
 
       levelNotifier.clearLayer(MapLayer.island);
 
-      state = container.read(levelEditorProvider);
+      state = container.read(levelEditorProvider(0));
       expect(state.islandGrassMask, isNull);
       expect(state.placements, isEmpty);
-    });
-
-    test('newGameMap resets level editor state only', () {
-      levelNotifier.setLayer(MapLayer.track);
-      levelNotifier.selectPalette('track_straight');
-      levelNotifier.stampAt(1, 1);
-
-      levelNotifier.newGameMap();
-
-      final state = container.read(levelEditorProvider);
-      expect(state.placements, isEmpty);
-      expect(state.isDirty, isFalse);
-      expect(state.currentFilePath, isNull);
     });
   });
 }

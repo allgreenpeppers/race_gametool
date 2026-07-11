@@ -1307,21 +1307,6 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
     await openGameLevel(path);
   }
 
-  void newGameMap() {
-    state = state.copyWith(
-      mapName: 'map_01',
-      placements: const [],
-      spawn: () => null,
-      undoStack: const [],
-      selectedPlacementIndex: () => null,
-      selection: const {},
-      islandGrassMask: () => null,
-      isDirty: false,
-      currentFilePath: () => null,
-      statusMessage: () => 'Created new game map',
-    );
-  }
-
   Future<void> save() async {
     if (state.currentFilePath != null) {
       await saveToPath(state.currentFilePath!);
@@ -1385,6 +1370,9 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
   Future<void> exportMap() => saveAs();
 }
 
+/// One independent level-editor instance per open Phase 2 tab, keyed by the
+/// tab id from [workspaceProvider]. Non-autoDispose, so an inactive tab keeps
+/// its state alive while its widget subtree is not mounted.
 final levelEditorProvider =
-    NotifierProvider<LevelEditorNotifier, LevelEditorState>(
-        LevelEditorNotifier.new);
+    NotifierProvider.family<LevelEditorNotifier, LevelEditorState, int>(
+        (_) => LevelEditorNotifier());

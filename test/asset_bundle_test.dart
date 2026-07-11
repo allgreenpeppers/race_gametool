@@ -41,9 +41,15 @@ void main() {
 
   test('write then read round trips editor state and game assets', () {
     final bundle = writeAssetBundle(
-      categoryImages: {BlockCategory.track: _draft()},
+      sources: [
+        BundleSource(
+          category: BlockCategory.track,
+          name: 'draft.png',
+          imageBytes: _draft(),
+          masks: masks,
+        ),
+      ],
       imageName: 'draft.png',
-      masks: masks,
     );
 
     final data = readAssetBundle(bundle);
@@ -66,14 +72,83 @@ void main() {
 
   test('extractGameAssets returns the sheet and dict without editor data', () {
     final bundle = writeAssetBundle(
-      categoryImages: {BlockCategory.track: _draft()},
+      sources: [
+        BundleSource(
+          category: BlockCategory.track,
+          name: 'draft.png',
+          imageBytes: _draft(),
+          masks: masks,
+        ),
+      ],
       imageName: 'draft.png',
-      masks: masks,
     );
     final assets = extractGameAssets(bundle);
     expect(img.decodePng(assets.sheetBytes), isNotNull);
     expect(assets.spriteDictJson, contains('straight_h'));
     expect(assets.spriteDictJson, contains('spriteSheet'));
+  });
+
+  test('multiple decoration images round trip as separate sources but one '
+      'merged dictionary', () {
+    // Two distinct decoration draft images, each carrying its own block.
+    Uint8List solid(int r, int g, int b) {
+      final im = img.Image(width: 32, height: 32, numChannels: 4);
+      img.fill(im, color: img.ColorRgba8(r, g, b, 255));
+      return Uint8List.fromList(img.encodePng(im));
+    }
+
+    final decoA = solid(10, 20, 30);
+    final decoB = solid(200, 100, 50);
+    const maskA = MaskDraft(
+      id: 'deco_a',
+      gridX: 0,
+      gridY: 0,
+      widthCells: 2,
+      heightCells: 2,
+      category: BlockCategory.decoration,
+    );
+    const maskB = MaskDraft(
+      id: 'deco_b',
+      gridX: 0,
+      gridY: 0,
+      widthCells: 1,
+      heightCells: 1,
+      category: BlockCategory.decoration,
+    );
+
+    final bundle = writeAssetBundle(
+      sources: [
+        BundleSource(
+          category: BlockCategory.decoration,
+          name: 'deco_a.png',
+          imageBytes: decoA,
+          masks: const [maskA],
+        ),
+        BundleSource(
+          category: BlockCategory.decoration,
+          name: 'deco_b.png',
+          imageBytes: decoB,
+          masks: const [maskB],
+        ),
+      ],
+      imageName: 'deco_a.png',
+    );
+
+    final data = readAssetBundle(bundle);
+
+    // Two decoration sources preserved separately, each with its own image
+    // bytes and its own mask.
+    expect(data.decorationSources.length, 2);
+    expect(data.decorationSources[0].name, 'deco_a.png');
+    expect(data.decorationSources[0].imageBytes, decoA);
+    expect(data.decorationSources[0].masks.single.id, 'deco_a');
+    expect(data.decorationSources[1].name, 'deco_b.png');
+    expect(data.decorationSources[1].imageBytes, decoB);
+    expect(data.decorationSources[1].masks.single.id, 'deco_b');
+
+    // But both blocks merge into the single sprite dictionary.
+    final ids = data.blocks.map((b) => b.id).toSet();
+    expect(ids, containsAll(['deco_a', 'deco_b']));
   });
 
   test('reading a bundle missing entries throws FormatException', () {

@@ -49,7 +49,7 @@ void main() {
 
   late ProviderContainer container;
   late LevelEditorNotifier notifier;
-  LevelEditorState read() => container.read(levelEditorProvider);
+  LevelEditorState read() => container.read(levelEditorProvider(0));
 
   setUp(() async {
     container = ProviderContainer();
@@ -61,7 +61,7 @@ void main() {
       sheetBytes: Uint8List(0),
       sheetImage: image,
     );
-    notifier = container.read(levelEditorProvider.notifier);
+    notifier = container.read(levelEditorProvider(0).notifier);
     notifier.setLayer(MapLayer.track);
     notifier.selectPalette('straight');
     notifier.stampAt(10, 10); // covers x10..14

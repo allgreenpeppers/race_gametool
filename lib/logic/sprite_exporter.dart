@@ -124,62 +124,70 @@ SpriteExportResult buildSpriteExport({
   );
 }
 
-/// Multi-source variant: each mask is cropped from the source image of its
-/// own [BlockCategory]. This allows Track, Island, and FinishLine assets to
-/// come from different draft images.
-SpriteExportResult buildSpriteExportMultiSource({
-  required Map<BlockCategory, Uint8List> categoryImages,
-  required List<MaskDraft> masks,
-  String sheetFileName = 'SpriteSheet.png',
-}) {
-  if (masks.isEmpty) {
-    throw ArgumentError('No masks defined; nothing to export');
-  }
+/// One draft image plus the masks authored on it. Several sources may share
+/// a [BlockCategory] (decoration can span multiple images); every source's
+/// masks are cropped from its own image and merged into one sheet/dict.
+class ExportSource {
+  const ExportSource({required this.imageBytes, required this.masks});
 
-  // Decode each category's source image once.
-  final decodedSources = <BlockCategory, img.Image>{};
-  for (final entry in categoryImages.entries) {
-    final decoded = img.decodeImage(entry.value);
-    if (decoded == null) {
-      throw ArgumentError(
-          'Could not decode image for ${entry.key.jsonValue}');
-    }
-    decodedSources[entry.key] = decoded;
-  }
+  final Uint8List imageBytes;
+  final List<MaskDraft> masks;
+}
 
+/// Crops [mask] out of its already-decoded [source] image, clearing any
+/// cells outside a freeform shape to transparent.
+img.Image _cropMask(img.Image source, MaskDraft mask) {
   const cell = GridConstants.cellSize;
-  final crops = <img.Image>[];
-  for (final mask in masks) {
-    final source = decodedSources[mask.category];
-    if (source == null) {
-      throw ArgumentError(
-          'No source image loaded for category ${mask.category.jsonValue} '
-          '(mask ${mask.id})');
-    }
-    var crop = img.copyCrop(
-      source,
-      x: (mask.gridX * cell).round(),
-      y: (mask.gridY * cell).round(),
-      width: (mask.widthCells * cell).round(),
-      height: (mask.heightCells * cell).round(),
-    );
-    crop = crop.convert(numChannels: 4);
-    final shapeCells = mask.cells;
-    if (shapeCells != null) {
-      final cellPx = cell.round();
-      for (var cy = 0; cy < mask.heightCells; cy++) {
-        for (var cx = 0; cx < mask.widthCells; cx++) {
-          if (shapeCells.contains((cx, cy))) continue;
-          for (var py = 0; py < cellPx; py++) {
-            for (var px = 0; px < cellPx; px++) {
-              crop.setPixelRgba(
-                  cx * cellPx + px, cy * cellPx + py, 0, 0, 0, 0);
-            }
+  var crop = img.copyCrop(
+    source,
+    x: (mask.gridX * cell).round(),
+    y: (mask.gridY * cell).round(),
+    width: (mask.widthCells * cell).round(),
+    height: (mask.heightCells * cell).round(),
+  );
+  crop = crop.convert(numChannels: 4);
+  final shapeCells = mask.cells;
+  if (shapeCells != null) {
+    final cellPx = cell.round();
+    for (var cy = 0; cy < mask.heightCells; cy++) {
+      for (var cx = 0; cx < mask.widthCells; cx++) {
+        if (shapeCells.contains((cx, cy))) continue;
+        for (var py = 0; py < cellPx; py++) {
+          for (var px = 0; px < cellPx; px++) {
+            crop.setPixelRgba(cx * cellPx + px, cy * cellPx + py, 0, 0, 0, 0);
           }
         }
       }
     }
-    crops.add(crop);
+  }
+  return crop;
+}
+
+/// Multi-source variant: each [ExportSource] contributes its own masks,
+/// cropped from its own image, and all pieces are packed into a single
+/// shared sheet + dictionary. This lets Track, Island, and any number of
+/// Decoration images come from different draft images yet merge into one
+/// asset set.
+SpriteExportResult buildSpriteExportSources(
+  List<ExportSource> sources, {
+  String sheetFileName = 'SpriteSheet.png',
+}) {
+  // Flatten to a single ordered mask list, cropping each from its own source.
+  final masks = <MaskDraft>[];
+  final crops = <img.Image>[];
+  for (final source in sources) {
+    if (source.masks.isEmpty) continue;
+    final decoded = img.decodeImage(source.imageBytes);
+    if (decoded == null) {
+      throw ArgumentError('Could not decode a source image');
+    }
+    for (final mask in source.masks) {
+      masks.add(mask);
+      crops.add(_cropMask(decoded, mask));
+    }
+  }
+  if (masks.isEmpty) {
+    throw ArgumentError('No masks defined; nothing to export');
   }
 
   final packed = packSprites([

@@ -39,22 +39,22 @@ void _placementTests() {
       sheetBytes: Uint8List(0),
       sheetImage: image,
     );
-    notifier = container.read(levelEditorProvider.notifier);
+    notifier = container.read(levelEditorProvider(0).notifier);
   });
 
   tearDown(() => container.dispose());
 
   test('stamping requires a selected palette block', () {
     notifier.stampAt(0, 0);
-    expect(container.read(levelEditorProvider).placements, isEmpty);
-    expect(container.read(levelEditorProvider).statusMessage,
+    expect(container.read(levelEditorProvider(0)).placements, isEmpty);
+    expect(container.read(levelEditorProvider(0)).statusMessage,
         contains('Select a palette block'));
   });
 
   test('stamp places the selected block at the grid cell', () {
     notifier.selectPalette('straight_h');
     notifier.stampAt(4, 6);
-    final placements = container.read(levelEditorProvider).placements;
+    final placements = container.read(levelEditorProvider(0)).placements;
     expect(placements.length, 1);
     expect(placements.single.blockId, 'straight_h');
     expect(placements.single.gridX, 4);
@@ -69,7 +69,7 @@ void _placementTests() {
     expect(x, 315);
     expect(y, 238);
     notifier.stampAt(319, 239);
-    final p = container.read(levelEditorProvider).placements.single;
+    final p = container.read(levelEditorProvider(0)).placements.single;
     expect(p.gridX, 315);
     expect(p.gridY, 238);
   });
@@ -79,22 +79,22 @@ void _placementTests() {
     notifier.stampAt(0, 0);
     // (4,1) is inside the first block's box -> rejected.
     notifier.stampAt(4, 1);
-    expect(container.read(levelEditorProvider).placements.length, 1);
-    expect(container.read(levelEditorProvider).statusMessage,
+    expect(container.read(levelEditorProvider(0)).placements.length, 1);
+    expect(container.read(levelEditorProvider(0)).statusMessage,
         contains('overlaps'));
     // (5,0) is clear -> accepted.
     notifier.stampAt(5, 0);
-    expect(container.read(levelEditorProvider).placements.length, 2);
+    expect(container.read(levelEditorProvider(0)).placements.length, 2);
   });
 
   test('select and erase hit the topmost placement at a cell', () {
     notifier.selectPalette('corner'); // 3x3
     notifier.stampAt(10, 10);
     notifier.selectAt(11, 11);
-    expect(container.read(levelEditorProvider).selectedPlacementIndex, 0);
+    expect(container.read(levelEditorProvider(0)).selectedPlacementIndex, 0);
 
     notifier.eraseAt(12, 12);
-    expect(container.read(levelEditorProvider).placements, isEmpty);
+    expect(container.read(levelEditorProvider(0)).placements, isEmpty);
   });
 
   test('deleteSelected removes the current selection', () {
@@ -102,8 +102,8 @@ void _placementTests() {
     notifier.stampAt(0, 0);
     notifier.selectAt(1, 1);
     notifier.deleteSelected();
-    expect(container.read(levelEditorProvider).placements, isEmpty);
-    expect(container.read(levelEditorProvider).selectedPlacementIndex, isNull);
+    expect(container.read(levelEditorProvider(0)).placements, isEmpty);
+    expect(container.read(levelEditorProvider(0)).selectedPlacementIndex, isNull);
   });
 
   test('spawn point and buildScene produce the export model', () {
@@ -139,7 +139,7 @@ void _placementTests() {
     notifier.multiDragStart(0, 0);
     notifier.multiDragUpdate(4, 6);
     notifier.multiDragEnd(cols: 160, rows: 120);
-    final sel = container.read(levelEditorProvider).selection;
+    final sel = container.read(levelEditorProvider(0)).selection;
     expect(sel, containsAll([0, 2]));
     expect(sel, isNot(contains(1)));
 
@@ -147,7 +147,7 @@ void _placementTests() {
     notifier.multiDragStart(1, 1);
     notifier.multiDragUpdate(21, 21);
     notifier.multiDragEnd(cols: 160, rows: 120);
-    final placements = container.read(levelEditorProvider).placements;
+    final placements = container.read(levelEditorProvider(0)).placements;
     expect(placements[0].gridX, 20); // corner moved +20
     expect(placements[0].gridY, 20);
     expect(placements[2].gridX, 20); // straight moved +20
@@ -166,7 +166,7 @@ void _placementTests() {
     notifier.multiDragUpdate(4, 1);
     notifier.multiDragEnd(cols: 160, rows: 120);
     // Rejected: first block stays put.
-    expect(container.read(levelEditorProvider).placements[0].gridX, 0);
+    expect(container.read(levelEditorProvider(0)).placements[0].gridX, 0);
   });
 }
 
@@ -196,7 +196,7 @@ void _connectionTests() {
       sheetBytes: Uint8List(0),
       sheetImage: image,
     );
-    notifier = container.read(levelEditorProvider.notifier);
+    notifier = container.read(levelEditorProvider(0).notifier);
     notifier.selectPalette('straight');
     notifier.stampAt(10, 10); // occupies x10..14, y10
   });
@@ -229,7 +229,7 @@ void _connectionTests() {
     expect(c.gridY, 10);
 
     notifier.placeConnected(c);
-    final placements = container.read(levelEditorProvider).placements;
+    final placements = container.read(levelEditorProvider(0)).placements;
     expect(placements.length, 2);
     expect(placements[1].gridX, 15);
   });
@@ -290,12 +290,12 @@ void _connectionTests() {
     expect(positions[2], (25, 10));
 
     notifier.chooseConnection(hit, candidate, cols: 40, rows: 40);
-    expect(container.read(levelEditorProvider).extendPreview, isNotNull);
+    expect(container.read(levelEditorProvider(0)).extendPreview, isNotNull);
 
     notifier.commitExtend(3);
-    final placements = container.read(levelEditorProvider).placements;
+    final placements = container.read(levelEditorProvider(0)).placements;
     expect(placements.length, 4); // original + 3
     expect(placements[3].gridX, 25);
-    expect(container.read(levelEditorProvider).extendPreview, isNull);
+    expect(container.read(levelEditorProvider(0)).extendPreview, isNull);
   });
 }

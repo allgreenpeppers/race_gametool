@@ -161,8 +161,9 @@ List<LevelDiagnostic> validateLevel(
 
 /// Live diagnostics for the current level, recomputed whenever the
 /// placements or the loaded library change.
-final levelDiagnosticsProvider = Provider<List<LevelDiagnostic>>((ref) {
-  final placements = ref.watch(levelEditorProvider).placements;
+final levelDiagnosticsProvider =
+    Provider.family<List<LevelDiagnostic>, int>((ref, tabId) {
+  final placements = ref.watch(levelEditorProvider(tabId)).placements;
   final library = ref.watch(assetLibraryProvider);
   return validateLevel(placements, library.blockById);
 });

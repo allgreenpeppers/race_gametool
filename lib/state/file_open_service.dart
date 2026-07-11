@@ -101,7 +101,7 @@ class FileOpenService {
   Future<void> _open(String path) async {
     debugPrint('FileOpenChannel: _open called for path $path');
     try {
-      _ref.read(appModeProvider.notifier).select(AppMode.assetDefiner);
+      _ref.read(workspaceProvider.notifier).activatePhase1();
       await _ref.read(assetDefinerProvider.notifier).openBundleFromPath(path);
       debugPrint('FileOpenChannel: openBundleFromPath succeeded');
     } catch (e, stack) {

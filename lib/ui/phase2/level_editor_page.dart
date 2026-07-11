@@ -14,7 +14,11 @@ import 'level_canvas.dart';
 /// canvas, then (in later steps) route ports, generate the island, and
 /// export the map scene.
 class LevelEditorPage extends ConsumerWidget {
-  const LevelEditorPage({super.key});
+  const LevelEditorPage({super.key, required this.tabId});
+
+  /// Which workspace tab (and thus which `levelEditorProvider` instance) this
+  /// page edits.
+  final int tabId;
 
   Future<void> _importBundle(WidgetRef ref) async {
     final result = await FilePicker.pickFiles(
@@ -37,12 +41,13 @@ class LevelEditorPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final library = ref.watch(assetLibraryProvider);
-    final state = ref.watch(levelEditorProvider);
-    final notifier = ref.read(levelEditorProvider.notifier);
+    final state = ref.watch(levelEditorProvider(tabId));
+    final notifier = ref.read(levelEditorProvider(tabId).notifier);
 
     return Row(
       children: [
         _Palette(
+          tabId: tabId,
           onImport: () => _importBundle(ref),
           selectedId: state.selectedPaletteId,
           onSelect: notifier.selectPalette,
@@ -80,10 +85,10 @@ class LevelEditorPage extends ConsumerWidget {
                           }
                           return KeyEventResult.ignored;
                         },
-                        child: const LevelCanvas(),
+                        child: LevelCanvas(tabId: tabId),
                       ),
               ),
-              if (library.isNotEmpty) const DiagnosticsPanel(),
+              if (library.isNotEmpty) DiagnosticsPanel(tabId: tabId),
             ],
           ),
         ),
@@ -94,11 +99,13 @@ class LevelEditorPage extends ConsumerWidget {
 
 class _Palette extends StatelessWidget {
   const _Palette({
+    required this.tabId,
     required this.onImport,
     required this.selectedId,
     required this.onSelect,
   });
 
+  final int tabId;
   final VoidCallback onImport;
   final String? selectedId;
   final void Function(String id) onSelect;
@@ -109,7 +116,7 @@ class _Palette extends StatelessWidget {
       builder: (context, ref, _) {
         final library = ref.watch(assetLibraryProvider);
         final activeLayer =
-            ref.watch(levelEditorProvider.select((s) => s.activeLayer));
+            ref.watch(levelEditorProvider(tabId).select((s) => s.activeLayer));
         final theme = Theme.of(context);
         // Only show blocks whose category belongs to the active layer.
         final blocks = [

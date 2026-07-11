@@ -8,12 +8,14 @@ import '../../state/level_editor_providers.dart';
 /// Lists connection errors and unconnected-port warnings; clicking a row
 /// selects the offending block on the canvas.
 class DiagnosticsPanel extends ConsumerWidget {
-  const DiagnosticsPanel({super.key});
+  const DiagnosticsPanel({super.key, required this.tabId});
+
+  final int tabId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final diagnostics = ref.watch(levelDiagnosticsProvider);
+    final diagnostics = ref.watch(levelDiagnosticsProvider(tabId));
     final errors =
         diagnostics.where((d) => d.severity == DiagnosticSeverity.error).length;
     final warnings = diagnostics.length - errors;
@@ -66,7 +68,7 @@ class DiagnosticsPanel extends ConsumerWidget {
                       onTap: d.placementIndex == null
                           ? null
                           : () => ref
-                              .read(levelEditorProvider.notifier)
+                              .read(levelEditorProvider(tabId).notifier)
                               .selectPlacement(d.placementIndex!),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(

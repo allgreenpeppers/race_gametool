@@ -19,7 +19,7 @@ void main() {
 
   late ProviderContainer container;
   late LevelEditorNotifier notifier;
-  LevelEditorState read() => container.read(levelEditorProvider);
+  LevelEditorState read() => container.read(levelEditorProvider(0));
 
   setUp(() async {
     container = ProviderContainer();
@@ -34,7 +34,7 @@ void main() {
       sheetBytes: Uint8List(0),
       sheetImage: image,
     );
-    notifier = container.read(levelEditorProvider.notifier);
+    notifier = container.read(levelEditorProvider(0).notifier);
   });
 
   tearDown(() => container.dispose());
