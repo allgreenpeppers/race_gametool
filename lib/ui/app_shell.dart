@@ -27,6 +27,11 @@ class AppShell extends ConsumerStatefulWidget {
 class _AppShellState extends ConsumerState<AppShell> with WindowListener, WidgetsBindingObserver {
   bool _isMaximized = false;
 
+  /// A close/quit gesture on macOS fires both the window_manager close hook
+  /// (onWindowClose) and Flutter's app-exit hook (didRequestAppExit). Both ask
+  /// to save; share one in-flight decision so the prompt only appears once.
+  Future<bool>? _pendingCloseDecision;
+
   @override
   void initState() {
     super.initState();
@@ -96,7 +101,16 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
   @override
   void onWindowUnmaximize() => setState(() => _isMaximized = false);
 
-  Future<bool> _checkUnsavedChangesAndPrompt() async {
+  /// Dedupes concurrent close/quit hooks: the first caller starts the prompt
+  /// flow, any hook that fires for the same gesture awaits the same result.
+  /// The decision is cleared once resolved so a later close re-prompts.
+  Future<bool> _checkUnsavedChangesAndPrompt() {
+    return _pendingCloseDecision ??= _promptUnsavedChangesForAll().whenComplete(
+      () => _pendingCloseDecision = null,
+    );
+  }
+
+  Future<bool> _promptUnsavedChangesForAll() async {
     final assetState = ref.read(assetDefinerProvider);
     final assetNotifier = ref.read(assetDefinerProvider.notifier);
 
