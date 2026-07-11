@@ -38,3 +38,8 @@ inno_bundle:
   name: Race Game Tool
   publisher: Race Game Tool
   admin: false
+  # Restrict installer languages to what Inno Setup ships by default. The
+  # default "all available" pulls in .isl files (e.g. Icelandic) that are not
+  # bundled with the compiler used in CI, which aborts the build.
+  languages:
+    - english
