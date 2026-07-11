@@ -1,3 +1,5 @@
+import 'dart:ui' show AppExitResponse;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -22,22 +24,16 @@ class AppShell extends ConsumerStatefulWidget {
   ConsumerState<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends ConsumerState<AppShell> with WindowListener {
-  /// A borderless (hidden title bar) window on Windows/Linux overhangs every
-  /// screen edge by the resize-border thickness when maximized, clipping our
-  /// top bar (tabs) and the top-right window-control buttons. We inset the
-  /// content by this amount while maximized so nothing is lost.
-  static const double _maximizedOverhang = 8.0;
-
+class _AppShellState extends ConsumerState<AppShell> with WindowListener, WidgetsBindingObserver {
   bool _isMaximized = false;
 
   @override
   void initState() {
     super.initState();
-    if (defaultTargetPlatform != TargetPlatform.macOS) {
-      windowManager.addListener(this);
-      _syncMaximized();
-    }
+    windowManager.addListener(this);
+    windowManager.setPreventClose(true);
+    _syncMaximized();
+    WidgetsBinding.instance.addObserver(this);
     // Start listening for .rgpack files opened from Finder.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref
@@ -62,9 +58,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
               for (final id in ref.read(workspaceProvider).levelTabs) {
                 final levelState = ref.read(levelEditorProvider(id));
                 if (!levelState.isDirty) continue;
-                final levelNotifier = ref.read(
-                  levelEditorProvider(id).notifier,
-                );
+                final levelNotifier = ref.read(levelEditorProvider(id).notifier);
                 final proceed = await _promptUnsavedChanges(
                   title: 'Save Game Map Changes?',
                   content:
@@ -84,9 +78,8 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
 
   @override
   void dispose() {
-    if (defaultTargetPlatform != TargetPlatform.macOS) {
-      windowManager.removeListener(this);
-    }
+    windowManager.removeListener(this);
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -102,6 +95,52 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
 
   @override
   void onWindowUnmaximize() => setState(() => _isMaximized = false);
+
+  Future<bool> _checkUnsavedChangesAndPrompt() async {
+    final assetState = ref.read(assetDefinerProvider);
+    final assetNotifier = ref.read(assetDefinerProvider.notifier);
+
+    if (assetState.isDirty) {
+      final proceed = await _promptUnsavedChanges(
+        title: 'Save Config Changes?',
+        content: 'Your asset config has unsaved changes. Do you want to save before quitting?',
+        onSave: () => assetNotifier.save(),
+      );
+      if (!proceed) {
+        return false;
+      }
+    }
+
+    for (final id in ref.read(workspaceProvider).levelTabs) {
+      final levelState = ref.read(levelEditorProvider(id));
+      if (!levelState.isDirty) continue;
+      final levelNotifier = ref.read(levelEditorProvider(id).notifier);
+      final proceed = await _promptUnsavedChanges(
+        title: 'Save Game Map Changes?',
+        content: 'The level "${levelState.mapName}" has unsaved changes. Do you want to save before quitting?',
+        onSave: () => levelNotifier.save(),
+      );
+      if (!proceed) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  @override
+  void onWindowClose() async {
+    final proceed = await _checkUnsavedChangesAndPrompt();
+    if (proceed) {
+      await windowManager.destroy();
+    }
+  }
+
+  @override
+  Future<AppExitResponse> didRequestAppExit() async {
+    final proceed = await _checkUnsavedChangesAndPrompt();
+    return proceed ? AppExitResponse.exit : AppExitResponse.cancel;
+  }
 
   Future<bool> _promptUnsavedChanges({
     required String title,
@@ -122,10 +161,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
             onPressed: () => Navigator.pop(context, 'discard'),
             child: const Text('Discard'),
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, 'save'),
-            child: const Text('Save'),
-          ),
+          FilledButton(onPressed: () => Navigator.pop(context, 'save'), child: const Text('Save')),
         ],
       ),
     );
@@ -146,11 +182,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
 
   void _notifyAssetsFirst() {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Load or define assets in Phase 1 before opening a level.',
-        ),
-      ),
+      const SnackBar(content: Text('Load or define assets in Phase 1 before opening a level.')),
     );
   }
 
@@ -285,14 +317,8 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
           'Are you sure you want to clear all placements on the ${activeLayer.label} layer? This cannot be undone.',
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Clear'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Clear')),
         ],
       ),
     );
@@ -316,10 +342,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
             'This will discard your manual island edits and regenerate from the track footprint. Continue?',
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
-            ),
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
               child: const Text('Continue'),
@@ -341,9 +364,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
     required IconData icon,
   }) {
     final theme = Theme.of(context);
-    final color = selected
-        ? theme.colorScheme.primary
-        : theme.colorScheme.onSurfaceVariant;
+    final color = selected ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant;
     return InkWell(
       onTap: onPressed,
       borderRadius: BorderRadius.circular(8),
@@ -356,9 +377,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
               : Colors.transparent,
           borderRadius: BorderRadius.circular(8),
           border: selected
-              ? Border.all(
-                  color: theme.colorScheme.primary.withValues(alpha: 0.5),
-                )
+              ? Border.all(color: theme.colorScheme.primary.withValues(alpha: 0.5))
               : null,
         ),
         child: Column(
@@ -404,10 +423,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
                 child: const Text('New Config'),
               ),
               MenuItemButton(
-                shortcut: const SingleActivator(
-                  LogicalKeyboardKey.keyN,
-                  control: true,
-                ),
+                shortcut: const SingleActivator(LogicalKeyboardKey.keyN, control: true),
                 onPressed: () => _handleNewGameMap(ref),
                 child: const Text('New Game Map'),
               ),
@@ -422,19 +438,13 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
                 child: const Text('Open Config...'),
               ),
               MenuItemButton(
-                shortcut: const SingleActivator(
-                  LogicalKeyboardKey.keyO,
-                  control: true,
-                ),
+                shortcut: const SingleActivator(LogicalKeyboardKey.keyO, control: true),
                 onPressed: () => _handleOpenGameLevel(ref),
                 child: const Text('Open Game Level...'),
               ),
               const PopupMenuDivider(),
               MenuItemButton(
-                shortcut: const SingleActivator(
-                  LogicalKeyboardKey.keyS,
-                  control: true,
-                ),
+                shortcut: const SingleActivator(LogicalKeyboardKey.keyS, control: true),
                 onPressed: () => _handleSave(ref),
                 child: const Text('Save'),
               ),
@@ -453,19 +463,13 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
           SubmenuButton(
             menuChildren: [
               MenuItemButton(
-                shortcut: const SingleActivator(
-                  LogicalKeyboardKey.keyZ,
-                  control: true,
-                ),
+                shortcut: const SingleActivator(LogicalKeyboardKey.keyZ, control: true),
                 onPressed: () => _handleUndo(ref),
                 child: const Text('Undo'),
               ),
               const PopupMenuDivider(),
               MenuItemButton(
-                shortcut: const SingleActivator(
-                  LogicalKeyboardKey.delete,
-                  control: true,
-                ),
+                shortcut: const SingleActivator(LogicalKeyboardKey.delete, control: true),
                 onPressed: () => _handleClearLayer(ref),
                 child: const Text('Clear Active Layer'),
               ),
@@ -486,12 +490,8 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
             menus: [
               PlatformMenuItemGroup(
                 members: [
-                  PlatformProvidedMenuItem(
-                    type: PlatformProvidedMenuItemType.about,
-                  ),
-                  PlatformProvidedMenuItem(
-                    type: PlatformProvidedMenuItemType.quit,
-                  ),
+                  PlatformProvidedMenuItem(type: PlatformProvidedMenuItemType.about),
+                  PlatformProvidedMenuItem(type: PlatformProvidedMenuItemType.quit),
                 ],
               ),
             ],
@@ -512,10 +512,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
                   ),
                   PlatformMenuItem(
                     label: 'New Game Map',
-                    shortcut: const SingleActivator(
-                      LogicalKeyboardKey.keyN,
-                      meta: true,
-                    ),
+                    shortcut: const SingleActivator(LogicalKeyboardKey.keyN, meta: true),
                     onSelected: () => _handleNewGameMap(ref),
                   ),
                 ],
@@ -533,10 +530,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
                   ),
                   PlatformMenuItem(
                     label: 'Open Game Level...',
-                    shortcut: const SingleActivator(
-                      LogicalKeyboardKey.keyO,
-                      meta: true,
-                    ),
+                    shortcut: const SingleActivator(LogicalKeyboardKey.keyO, meta: true),
                     onSelected: () => _handleOpenGameLevel(ref),
                   ),
                 ],
@@ -545,10 +539,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
                 members: [
                   PlatformMenuItem(
                     label: 'Save',
-                    shortcut: const SingleActivator(
-                      LogicalKeyboardKey.keyS,
-                      meta: true,
-                    ),
+                    shortcut: const SingleActivator(LogicalKeyboardKey.keyS, meta: true),
                     onSelected: () => _handleSave(ref),
                   ),
                   PlatformMenuItem(
@@ -571,10 +562,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
                 members: [
                   PlatformMenuItem(
                     label: 'Undo',
-                    shortcut: const SingleActivator(
-                      LogicalKeyboardKey.keyZ,
-                      meta: true,
-                    ),
+                    shortcut: const SingleActivator(LogicalKeyboardKey.keyZ, meta: true),
                     onSelected: () => _handleUndo(ref),
                   ),
                 ],
@@ -583,10 +571,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
                 members: [
                   PlatformMenuItem(
                     label: 'Clear Active Layer',
-                    shortcut: const SingleActivator(
-                      LogicalKeyboardKey.delete,
-                      meta: true,
-                    ),
+                    shortcut: const SingleActivator(LogicalKeyboardKey.delete, meta: true),
                     onSelected: () => _handleClearLayer(ref),
                   ),
                 ],
@@ -606,22 +591,14 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
     final workspace = ref.watch(workspaceProvider);
     final mode = workspace.mode;
     final activeId = workspace.activeLevelTab;
-    final hasAssets = ref.watch(
-      assetLibraryProvider.select((l) => l.isNotEmpty),
-    );
+    final hasAssets = ref.watch(assetLibraryProvider.select((l) => l.isNotEmpty));
 
     // Watch specific provider states to render in the unified top toolbar.
     // This avoids rebuilding the AppShell (and triggering macOS native menubar rebuilds) on every mouse hover/movement.
-    final activeCategory = ref.watch(
-      assetDefinerProvider.select((s) => s.activeCategory),
-    );
+    final activeCategory = ref.watch(assetDefinerProvider.select((s) => s.activeCategory));
     final assetTool = ref.watch(assetDefinerProvider.select((s) => s.tool));
-    final hasActiveImage = ref.watch(
-      assetDefinerProvider.select((s) => s.activeImage != null),
-    );
-    final assetStatusMessage = ref.watch(
-      assetDefinerProvider.select((s) => s.statusMessage),
-    );
+    final hasActiveImage = ref.watch(assetDefinerProvider.select((s) => s.activeImage != null));
+    final assetStatusMessage = ref.watch(assetDefinerProvider.select((s) => s.statusMessage));
     final assetNotifier = ref.read(assetDefinerProvider.notifier);
 
     // Level toolbar/status state is scoped to the active tab; the fallbacks
@@ -637,443 +614,397 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener {
         : ref.watch(levelEditorProvider(activeId).select((s) => s.tool));
     final islandBrushRadius = activeId == null
         ? 0
-        : ref.watch(
-            levelEditorProvider(activeId).select((s) => s.islandBrushRadius),
-          );
+        : ref.watch(levelEditorProvider(activeId).select((s) => s.islandBrushRadius));
     final levelStatusMessage = activeId == null
         ? null
-        : ref.watch(
-            levelEditorProvider(activeId).select((s) => s.statusMessage),
-          );
+        : ref.watch(levelEditorProvider(activeId).select((s) => s.statusMessage));
     final placementsLength = activeId == null
         ? 0
-        : ref.watch(
-            levelEditorProvider(activeId).select((s) => s.placements.length),
-          );
+        : ref.watch(levelEditorProvider(activeId).select((s) => s.placements.length));
     final hasSpawn = activeId == null
         ? false
-        : ref.watch(
-            levelEditorProvider(activeId).select((s) => s.spawn != null),
-          );
+        : ref.watch(levelEditorProvider(activeId).select((s) => s.spawn != null));
 
     final mainContent = CallbackShortcuts(
       bindings: {
-        const SingleActivator(LogicalKeyboardKey.keyZ, control: true): () =>
-            levelNotifier?.undo(),
-        const SingleActivator(LogicalKeyboardKey.keyZ, meta: true): () =>
-            levelNotifier?.undo(),
+        const SingleActivator(LogicalKeyboardKey.keyZ, control: true): () => levelNotifier?.undo(),
+        const SingleActivator(LogicalKeyboardKey.keyZ, meta: true): () => levelNotifier?.undo(),
         const SingleActivator(LogicalKeyboardKey.keyW, control: true): () {
           if (activeId != null) _handleCloseTab(activeId);
         },
         const SingleActivator(LogicalKeyboardKey.keyW, meta: true): () {
           if (activeId != null) _handleCloseTab(activeId);
         },
+        if (defaultTargetPlatform != TargetPlatform.macOS) ...{
+          // New Config: Ctrl+Shift+N / Cmd+Shift+N
+          const SingleActivator(LogicalKeyboardKey.keyN, control: true, shift: true): () =>
+              _handleNewConfig(ref),
+          const SingleActivator(LogicalKeyboardKey.keyN, meta: true, shift: true): () =>
+              _handleNewConfig(ref),
+
+          // New Game Map: Ctrl+N / Cmd+N
+          const SingleActivator(LogicalKeyboardKey.keyN, control: true): () =>
+              _handleNewGameMap(ref),
+          const SingleActivator(LogicalKeyboardKey.keyN, meta: true): () =>
+              _handleNewGameMap(ref),
+
+          // Open Config: Ctrl+Shift+O / Cmd+Shift+O
+          const SingleActivator(LogicalKeyboardKey.keyO, control: true, shift: true): () =>
+              _handleOpenConfig(ref),
+          const SingleActivator(LogicalKeyboardKey.keyO, meta: true, shift: true): () =>
+              _handleOpenConfig(ref),
+
+          // Open Game Level: Ctrl+O / Cmd+O
+          const SingleActivator(LogicalKeyboardKey.keyO, control: true): () =>
+              _handleOpenGameLevel(ref),
+          const SingleActivator(LogicalKeyboardKey.keyO, meta: true): () =>
+              _handleOpenGameLevel(ref),
+
+          // Save: Ctrl+S / Cmd+S
+          const SingleActivator(LogicalKeyboardKey.keyS, control: true): () =>
+              _handleSave(ref),
+          const SingleActivator(LogicalKeyboardKey.keyS, meta: true): () =>
+              _handleSave(ref),
+
+          // Save As: Ctrl+Shift+S / Cmd+Shift+S
+          const SingleActivator(LogicalKeyboardKey.keyS, control: true, shift: true): () =>
+              _handleSaveAs(ref),
+          const SingleActivator(LogicalKeyboardKey.keyS, meta: true, shift: true): () =>
+              _handleSaveAs(ref),
+
+          // Clear Active Layer: Ctrl+Delete / Cmd+Delete
+          const SingleActivator(LogicalKeyboardKey.delete, control: true): () =>
+              _handleClearLayer(ref),
+          const SingleActivator(LogicalKeyboardKey.delete, meta: true): () =>
+              _handleClearLayer(ref),
+        },
       },
-      child: Padding(
-        // Inset the whole window while maximized so the borderless overhang
-        // does not clip the top bar (tabs) or the top-right window controls.
-        padding: EdgeInsets.all(_isMaximized ? _maximizedOverhang : 0.0),
-        child: Scaffold(
-          body: Column(
-            children: [
-              // Unified Top Toolbar and Window Control Row (Split into 2 Lines)
-              Container(
-                color: theme.colorScheme.surfaceContainerHigh,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // Chrome-style title bar: the browser tab strip lives in the
-                    // window drag region next to the OS window controls. The
-                    // active tab shares the toolbar's colour so it reads as one
-                    // connected surface, with no divider between them.
+      child: Scaffold(
+        body: Column(
+          children: [
+            // Unified Top Toolbar and Window Control Row (Split into 2 Lines)
+            Container(
+              color: theme.colorScheme.surfaceContainerHigh,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (defaultTargetPlatform != TargetPlatform.macOS)
                     Container(
                       height: 40,
                       color: theme.colorScheme.surfaceContainerLow,
                       child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          // macOS spacing to clear the system traffic-light buttons.
-                          if (defaultTargetPlatform == TargetPlatform.macOS)
-                            const SizedBox(width: 78)
-                          else
-                            const SizedBox(width: 8),
-
-                          // Tabs: pinned Phase 1 + one per open level. Shrinks and
-                          // scrolls horizontally when the row runs out of space.
-                          Flexible(
-                            child: SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              child: Row(
-                                children: [
-                                  _Phase1TabChip(
-                                    selected: activeId == null,
-                                    onSelect: () => ref
-                                        .read(workspaceProvider.notifier)
-                                        .activatePhase1(),
-                                  ),
-                                  for (final id in workspace.levelTabs)
-                                    _LevelTabChip(
-                                      key: ValueKey(id),
-                                      id: id,
-                                      selected: activeId == id,
-                                      onSelect: () => ref
-                                          .read(workspaceProvider.notifier)
-                                          .activateLevelTab(id),
-                                      onClose: () => _handleCloseTab(id),
-                                    ),
-                                ],
-                              ),
-                            ),
-                          ),
-
-                          Tooltip(
-                            message: hasAssets
-                                ? 'New level tab'
-                                : 'Define or load assets in Phase 1 first',
-                            child: IconButton(
-                              iconSize: 18,
-                              visualDensity: VisualDensity.compact,
-                              icon: const Icon(Icons.add),
-                              onPressed: hasAssets
-                                  ? () => _handleNewGameMap(ref)
-                                  : null,
-                            ),
-                          ),
-
-                          // Remaining space drags the window.
+                          Center(child: _buildMenuBar(context, ref)),
                           Expanded(
-                            child: DragToMoveArea(
-                              child: Container(
-                                height: 40,
-                                color: Colors.transparent,
-                              ),
-                            ),
+                            child: DragToMoveArea(child: Container(color: Colors.transparent)),
                           ),
-
-                          // Windows/Linux window control buttons, flush to the
-                          // right edge. WindowCaption is a full-width title bar
-                          // widget, so we place its individual buttons directly
-                          // instead of constraining the whole widget.
-                          if (defaultTargetPlatform != TargetPlatform.macOS)
-                            SizedBox(
-                              height: 40,
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  WindowCaptionButton.minimize(
-                                    brightness: theme.brightness,
-                                    onPressed: windowManager.minimize,
-                                  ),
-                                  if (_isMaximized)
-                                    WindowCaptionButton.unmaximize(
-                                      brightness: theme.brightness,
-                                      onPressed: windowManager.unmaximize,
-                                    )
-                                  else
-                                    WindowCaptionButton.maximize(
-                                      brightness: theme.brightness,
-                                      onPressed: windowManager.maximize,
-                                    ),
-                                  WindowCaptionButton.close(
-                                    brightness: theme.brightness,
-                                    onPressed: windowManager.close,
-                                  ),
-                                ],
-                              ),
+                          WindowCaptionButton.minimize(
+                            brightness: theme.brightness,
+                            onPressed: windowManager.minimize,
+                          ),
+                          if (_isMaximized)
+                            WindowCaptionButton.unmaximize(
+                              brightness: theme.brightness,
+                              onPressed: windowManager.unmaximize,
+                            )
+                          else
+                            WindowCaptionButton.maximize(
+                              brightness: theme.brightness,
+                              onPressed: windowManager.maximize,
                             ),
+                          WindowCaptionButton.close(
+                            brightness: theme.brightness,
+                            onPressed: windowManager.close,
+                          ),
                         ],
                       ),
                     ),
+                  // Chrome-style title bar: the browser tab strip lives in the
+                  // window drag region next to the OS window controls. The
+                  // active tab shares the toolbar's colour so it reads as one
+                  // connected surface, with no divider between them.
+                  Container(
+                    height: 40,
+                    color: theme.colorScheme.surfaceContainerLow,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // macOS spacing to clear the system traffic-light buttons.
+                        if (defaultTargetPlatform == TargetPlatform.macOS)
+                          const SizedBox(width: 78)
+                        else
+                          const SizedBox(width: 8),
 
-                    // Line 2: Tools and Action buttons (horizontal scrollable row)
-                    Container(
-                      height: 44,
-                      color: theme.colorScheme.surfaceContainerHigh,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children: [
-                            // On non-macOS the app menu has no native menu bar,
-                            // so it leads the toolbar here.
-                            if (defaultTargetPlatform !=
-                                TargetPlatform.macOS) ...[
-                              _buildMenuBar(context, ref),
-                              const VerticalDivider(
-                                width: 24,
-                                indent: 10,
-                                endIndent: 10,
-                              ),
-                            ],
-                            if (mode == AppMode.assetDefiner) ...[
-                              // Tool SegmentedButton
-                              SegmentedButton<Phase1Tool>(
-                                showSelectedIcon: false,
-                                style: const ButtonStyle(
-                                  visualDensity: VisualDensity.compact,
-                                ),
-                                segments: [
-                                  for (final t in Phase1Tool.values)
-                                    if ((activeCategory ==
-                                            BlockCategory.track) ||
-                                        (activeCategory ==
-                                                BlockCategory.islandTile &&
-                                            t != Phase1Tool.paintMask &&
-                                            t != Phase1Tool.addPort) ||
-                                        (activeCategory ==
-                                                BlockCategory.decoration &&
-                                            t != Phase1Tool.addPort))
-                                      ButtonSegment(
-                                        value: t,
-                                        tooltip: t.label,
-                                        icon: Icon(switch (t) {
-                                          Phase1Tool.select =>
-                                            Icons.near_me_outlined,
-                                          Phase1Tool.move => Icons.open_with,
-                                          Phase1Tool.drawBox =>
-                                            Icons.crop_square,
-                                          Phase1Tool.paintMask =>
-                                            Icons.brush_outlined,
-                                          Phase1Tool.addPort => Icons.adjust,
-                                        }),
-                                      ),
-                                ],
-                                selected: {assetTool},
-                                onSelectionChanged: (selection) =>
-                                    assetNotifier.setTool(selection.first),
-                              ),
-                              const SizedBox(width: 12),
-
-                              // Action Buttons
-                              FilledButton.tonalIcon(
-                                onPressed: assetNotifier.loadImage,
-                                style: FilledButton.styleFrom(
-                                  visualDensity: VisualDensity.compact,
-                                ),
-                                icon: const Icon(
-                                  Icons.image_outlined,
-                                  size: 16,
-                                ),
-                                label: Text(
-                                  !hasActiveImage
-                                      ? 'Load Image'
-                                      : 'Replace Image',
-                                ),
-                              ),
-                            ] else if (mode == AppMode.levelEditor) ...[
-                              // Tool SegmentedButton
-                              SegmentedButton<LevelTool>(
-                                showSelectedIcon: false,
-                                style: const ButtonStyle(
-                                  visualDensity: VisualDensity.compact,
-                                ),
-                                segments: [
-                                  for (final tool in LevelTool.values)
-                                    if ((activeLayer != MapLayer.island &&
-                                            activeLayer !=
-                                                MapLayer.decoration) ||
-                                        (tool != LevelTool.connect &&
-                                            tool != LevelTool.spawn))
-                                      ButtonSegment(
-                                        value: tool,
-                                        tooltip: tool.label,
-                                        icon: Icon(switch (tool) {
-                                          LevelTool.select =>
-                                            Icons.near_me_outlined,
-                                          LevelTool.multi => Icons.select_all,
-                                          LevelTool.stamp =>
-                                            Icons.add_box_outlined,
-                                          LevelTool.connect =>
-                                            Icons.hub_outlined,
-                                          LevelTool.spawn =>
-                                            Icons.flag_outlined,
-                                          LevelTool.erase =>
-                                            Icons.cleaning_services,
-                                        }),
-                                      ),
-                                ],
-                                selected: {levelTool},
-                                onSelectionChanged: (s) =>
-                                    levelNotifier!.setTool(s.first),
-                              ),
-                              const SizedBox(width: 12),
-
-                              // Island Brush Controls
-                              if (activeLayer == MapLayer.island) ...[
-                                const Icon(Icons.brush, size: 16),
-                                const SizedBox(width: 4),
-                                SegmentedButton<int>(
-                                  showSelectedIcon: false,
-                                  style: const ButtonStyle(
-                                    visualDensity: VisualDensity.compact,
+                        // Tabs: pinned Phase 1 + one per open level. Shrinks and
+                        // scrolls horizontally when the row runs out of space.
+                        _Phase1TabChip(
+                          selected: activeId == null,
+                          onSelect: () => ref.read(workspaceProvider.notifier).activatePhase1(),
+                        ),
+                        Expanded(
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
+                              children: [
+                                for (final id in workspace.levelTabs)
+                                  _LevelTabChip(
+                                    key: ValueKey(id),
+                                    id: id,
+                                    selected: activeId == id,
+                                    onSelect: () =>
+                                        ref.read(workspaceProvider.notifier).activateLevelTab(id),
+                                    onClose: () => _handleCloseTab(id),
                                   ),
-                                  segments: const [
-                                    ButtonSegment(value: 0, label: Text('1x1')),
-                                    ButtonSegment(value: 1, label: Text('3x3')),
-                                    ButtonSegment(value: 2, label: Text('5x5')),
-                                    ButtonSegment(value: 3, label: Text('7x7')),
-                                  ],
-                                  selected: {islandBrushRadius},
-                                  onSelectionChanged: (s) => levelNotifier!
-                                      .setIslandBrushRadius(s.first),
-                                ),
-                                const SizedBox(width: 6),
-                                FilledButton.tonalIcon(
-                                  onPressed: () => _handleAutotile(activeId!),
-                                  style: FilledButton.styleFrom(
-                                    visualDensity: VisualDensity.compact,
+                                Tooltip(
+                                  message: hasAssets
+                                      ? 'New level tab'
+                                      : 'Define or load assets in Phase 1 first',
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(5),
+                                    child: IconButton(
+                                      iconSize: 18,
+                                      visualDensity: VisualDensity.compact,
+                                      icon: const Icon(Icons.add),
+                                      onPressed: hasAssets ? () => _handleNewGameMap(ref) : null,
+                                    ),
                                   ),
-                                  icon: const Icon(Icons.grass, size: 16),
-                                  label: const Text('Autotile'),
                                 ),
-                                const SizedBox(width: 12),
                               ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Line 2: Tools and Action buttons (horizontal scrollable row)
+                  Container(
+                    height: 44,
+                    color: theme.colorScheme.surfaceContainerHigh,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          if (mode == AppMode.assetDefiner) ...[
+                            // Tool SegmentedButton
+                            SegmentedButton<Phase1Tool>(
+                              showSelectedIcon: false,
+                              style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                              segments: [
+                                for (final t in Phase1Tool.values)
+                                  if ((activeCategory == BlockCategory.track) ||
+                                      (activeCategory == BlockCategory.islandTile &&
+                                          t != Phase1Tool.paintMask &&
+                                          t != Phase1Tool.addPort) ||
+                                      (activeCategory == BlockCategory.decoration &&
+                                          t != Phase1Tool.addPort))
+                                    ButtonSegment(
+                                      value: t,
+                                      tooltip: t.label,
+                                      icon: Icon(switch (t) {
+                                        Phase1Tool.select => Icons.near_me_outlined,
+                                        Phase1Tool.move => Icons.open_with,
+                                        Phase1Tool.drawBox => Icons.crop_square,
+                                        Phase1Tool.paintMask => Icons.brush_outlined,
+                                        Phase1Tool.addPort => Icons.adjust,
+                                      }),
+                                    ),
+                              ],
+                              selected: {assetTool},
+                              onSelectionChanged: (selection) =>
+                                  assetNotifier.setTool(selection.first),
+                            ),
+                            const SizedBox(width: 12),
+
+                            // Action Buttons
+                            FilledButton.tonalIcon(
+                              onPressed: assetNotifier.loadImage,
+                              style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
+                              icon: const Icon(Icons.image_outlined, size: 16),
+                              label: Text(!hasActiveImage ? 'Load Image' : 'Replace Image'),
+                            ),
+                          ] else if (mode == AppMode.levelEditor) ...[
+                            // Tool SegmentedButton
+                            SegmentedButton<LevelTool>(
+                              showSelectedIcon: false,
+                              style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                              segments: [
+                                for (final tool in LevelTool.values)
+                                  if ((activeLayer != MapLayer.island &&
+                                          activeLayer != MapLayer.decoration) ||
+                                      (tool != LevelTool.connect && tool != LevelTool.spawn))
+                                    ButtonSegment(
+                                      value: tool,
+                                      tooltip: tool.label,
+                                      icon: Icon(switch (tool) {
+                                        LevelTool.select => Icons.near_me_outlined,
+                                        LevelTool.multi => Icons.select_all,
+                                        LevelTool.stamp => Icons.add_box_outlined,
+                                        LevelTool.connect => Icons.hub_outlined,
+                                        LevelTool.spawn => Icons.flag_outlined,
+                                        LevelTool.erase => Icons.cleaning_services,
+                                      }),
+                                    ),
+                              ],
+                              selected: {levelTool},
+                              onSelectionChanged: (s) => levelNotifier!.setTool(s.first),
+                            ),
+                            const SizedBox(width: 12),
+
+                            // Island Brush Controls
+                            if (activeLayer == MapLayer.island) ...[
+                              const Icon(Icons.brush, size: 16),
+                              const SizedBox(width: 4),
+                              SegmentedButton<int>(
+                                showSelectedIcon: false,
+                                style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                                segments: const [
+                                  ButtonSegment(value: 0, label: Text('1x1')),
+                                  ButtonSegment(value: 1, label: Text('3x3')),
+                                  ButtonSegment(value: 2, label: Text('5x5')),
+                                  ButtonSegment(value: 3, label: Text('7x7')),
+                                ],
+                                selected: {islandBrushRadius},
+                                onSelectionChanged: (s) =>
+                                    levelNotifier!.setIslandBrushRadius(s.first),
+                              ),
+                              const SizedBox(width: 6),
+                              FilledButton.tonalIcon(
+                                onPressed: () => _handleAutotile(activeId!),
+                                style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
+                                icon: const Icon(Icons.grass, size: 16),
+                                label: const Text('Autotile'),
+                              ),
+                              const SizedBox(width: 12),
                             ],
                           ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(height: 1),
-
-              // Main View Content
-              Expanded(
-                child: Row(
-                  children: [
-                    // Sidebar
-                    Container(
-                      width: 90,
-                      color: theme.colorScheme.surfaceContainerLow,
-                      child: Column(
-                        children: [
-                          const SizedBox(height: 16),
-                          Expanded(
-                            child: SingleChildScrollView(
-                              child: Column(
-                                children: [
-                                  if (mode == AppMode.assetDefiner) ...[
-                                    for (final cat in [
-                                      BlockCategory.track,
-                                      BlockCategory.islandTile,
-                                      BlockCategory.decoration,
-                                    ]) ...[
-                                      _buildSidebarItem(
-                                        context,
-                                        label: categoryLabel(cat),
-                                        selected: activeCategory == cat,
-                                        onPressed: () => assetNotifier
-                                            .setActiveCategory(cat),
-                                        icon: switch (cat) {
-                                          BlockCategory.track =>
-                                            Icons.alt_route,
-                                          BlockCategory.islandTile =>
-                                            Icons.landscape,
-                                          BlockCategory.decoration =>
-                                            Icons.park,
-                                          _ => Icons.circle,
-                                        },
-                                      ),
-                                      const SizedBox(height: 12),
-                                    ],
-                                    // Decoration spans multiple images; list them
-                                    // below the categories (behind a divider) so
-                                    // the active one can be switched, added, or
-                                    // removed.
-                                    if (activeCategory ==
-                                        BlockCategory.decoration) ...[
-                                      const Divider(indent: 12, endIndent: 12),
-                                      const SizedBox(height: 8),
-                                      const _DecorationSourceList(),
-                                    ],
-                                  ] else if (mode == AppMode.levelEditor) ...[
-                                    for (final layer in MapLayer.values) ...[
-                                      _buildSidebarItem(
-                                        context,
-                                        label: layer.label,
-                                        selected: activeLayer == layer,
-                                        onPressed: () =>
-                                            levelNotifier!.setLayer(layer),
-                                        icon: switch (layer) {
-                                          MapLayer.island => Icons.landscape,
-                                          MapLayer.track => Icons.alt_route,
-                                          MapLayer.decoration => Icons.park,
-                                          MapLayer.function =>
-                                            Icons.settings_suggest,
-                                        },
-                                      ),
-                                      const SizedBox(height: 12),
-                                    ],
-                                  ],
-                                ],
-                              ),
-                            ),
-                          ),
                         ],
                       ),
                     ),
-                    const VerticalDivider(width: 1),
-                    Expanded(
-                      child: activeId == null
-                          ? const AssetDefinerPage()
-                          : LevelEditorPage(
-                              key: ValueKey(activeId),
-                              tabId: activeId,
-                            ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-              const Divider(height: 1),
+            ),
+            const Divider(height: 1),
 
-              // Desktop IDE-Style bottom Status Bar
-              Container(
-                height: 22,
-                color: theme.colorScheme.surfaceContainerLow,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        mode == AppMode.assetDefiner
-                            ? (assetStatusMessage ?? 'Asset Definer ready')
-                            : (levelStatusMessage ?? 'Level Editor ready'),
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          fontSize: 11,
+            // Main View Content
+            Expanded(
+              child: Row(
+                children: [
+                  // Sidebar
+                  Container(
+                    width: 90,
+                    color: theme.colorScheme.surfaceContainerLow,
+                    child: Column(
+                      children: [
+                        const SizedBox(height: 16),
+                        Expanded(
+                          child: SingleChildScrollView(
+                            child: Column(
+                              children: [
+                                if (mode == AppMode.assetDefiner) ...[
+                                  for (final cat in [
+                                    BlockCategory.track,
+                                    BlockCategory.islandTile,
+                                    BlockCategory.decoration,
+                                  ]) ...[
+                                    _buildSidebarItem(
+                                      context,
+                                      label: categoryLabel(cat),
+                                      selected: activeCategory == cat,
+                                      onPressed: () => assetNotifier.setActiveCategory(cat),
+                                      icon: switch (cat) {
+                                        BlockCategory.track => Icons.alt_route,
+                                        BlockCategory.islandTile => Icons.landscape,
+                                        BlockCategory.decoration => Icons.park,
+                                        _ => Icons.circle,
+                                      },
+                                    ),
+                                    const SizedBox(height: 12),
+                                  ],
+                                  // Decoration spans multiple images; list them
+                                  // below the categories (behind a divider) so
+                                  // the active one can be switched, added, or
+                                  // removed.
+                                  if (activeCategory == BlockCategory.decoration) ...[
+                                    const Divider(indent: 12, endIndent: 12),
+                                    const SizedBox(height: 8),
+                                    const _DecorationSourceList(),
+                                  ],
+                                ] else if (mode == AppMode.levelEditor) ...[
+                                  for (final layer in MapLayer.values) ...[
+                                    _buildSidebarItem(
+                                      context,
+                                      label: layer.label,
+                                      selected: activeLayer == layer,
+                                      onPressed: () => levelNotifier!.setLayer(layer),
+                                      icon: switch (layer) {
+                                        MapLayer.island => Icons.landscape,
+                                        MapLayer.track => Icons.alt_route,
+                                        MapLayer.decoration => Icons.park,
+                                        MapLayer.function => Icons.settings_suggest,
+                                      },
+                                    ),
+                                    const SizedBox(height: 12),
+                                  ],
+                                ],
+                              ],
+                            ),
+                          ),
                         ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      ],
                     ),
-                    if (mode == AppMode.levelEditor) ...[
-                      Text(
-                        '$placementsLength blocks placed',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          fontSize: 11,
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      if (hasSpawn)
-                        const Text(
-                          'Spawn set',
-                          style: TextStyle(
-                            color: Colors.greenAccent,
-                            fontSize: 11,
-                          ),
-                        )
-                      else
-                        const Text(
-                          'No Spawn',
-                          style: TextStyle(
-                            color: Colors.orangeAccent,
-                            fontSize: 11,
-                          ),
-                        ),
-                    ],
-                  ],
-                ),
+                  ),
+                  const VerticalDivider(width: 1),
+                  Expanded(
+                    child: activeId == null
+                        ? const AssetDefinerPage()
+                        : LevelEditorPage(key: ValueKey(activeId), tabId: activeId),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+            const Divider(height: 1),
+
+            // Desktop IDE-Style bottom Status Bar
+            Container(
+              height: 22,
+              color: theme.colorScheme.surfaceContainerLow,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      mode == AppMode.assetDefiner
+                          ? (assetStatusMessage ?? 'Asset Definer ready')
+                          : (levelStatusMessage ?? 'Level Editor ready'),
+                      style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (mode == AppMode.levelEditor) ...[
+                    Text(
+                      '$placementsLength blocks placed',
+                      style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
+                    ),
+                    const SizedBox(width: 16),
+                    if (hasSpawn)
+                      const Text(
+                        'Spawn set',
+                        style: TextStyle(color: Colors.greenAccent, fontSize: 11),
+                      )
+                    else
+                      const Text(
+                        'No Spawn',
+                        style: TextStyle(color: Colors.orangeAccent, fontSize: 11),
+                      ),
+                  ],
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -1091,16 +1022,9 @@ class _DecorationSourceList extends ConsumerWidget {
 
   /// Removing a decoration image also drops the blocks masked on it, so it is
   /// confirmed first.
-  Future<void> _confirmDelete(
-    BuildContext context,
-    WidgetRef ref,
-    int index,
-    String label,
-  ) async {
+  Future<void> _confirmDelete(BuildContext context, WidgetRef ref, int index, String label) async {
     final decorationMasks = ref.read(assetDefinerProvider).decorationMasks;
-    final blockCount = index < decorationMasks.length
-        ? decorationMasks[index].length
-        : 0;
+    final blockCount = index < decorationMasks.length ? decorationMasks[index].length : 0;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1110,14 +1034,8 @@ class _DecorationSourceList extends ConsumerWidget {
           'This cannot be undone.',
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Remove'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Remove')),
         ],
       ),
     );
@@ -1131,13 +1049,9 @@ class _DecorationSourceList extends ConsumerWidget {
     // Names joined by newline (which cannot appear in a filename), so the
     // watched value is a plain String and compares by value.
     final joined = ref.watch(
-      assetDefinerProvider.select(
-        (s) => s.decorationSources.map((d) => d.name).join('\n'),
-      ),
+      assetDefinerProvider.select((s) => s.decorationSources.map((d) => d.name).join('\n')),
     );
-    final activeIndex = ref.watch(
-      assetDefinerProvider.select((s) => s.activeDecorationIndex),
-    );
+    final activeIndex = ref.watch(assetDefinerProvider.select((s) => s.activeDecorationIndex));
     final names = joined.isEmpty ? const <String>[] : joined.split('\n');
     final notifier = ref.read(assetDefinerProvider.notifier);
 
@@ -1149,12 +1063,8 @@ class _DecorationSourceList extends ConsumerWidget {
             label: names[i].isEmpty ? 'image ${i + 1}' : names[i],
             selected: i == activeIndex,
             onTap: () => notifier.setActiveDecorationIndex(i),
-            onDelete: () => _confirmDelete(
-              context,
-              ref,
-              i,
-              names[i].isEmpty ? 'image ${i + 1}' : names[i],
-            ),
+            onDelete: () =>
+                _confirmDelete(context, ref, i, names[i].isEmpty ? 'image ${i + 1}' : names[i]),
           ),
         const SizedBox(height: 4),
         _AddDecorationButton(onTap: notifier.addDecorationImage),
@@ -1189,13 +1099,7 @@ class _AddDecorationButton extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(Icons.add, size: 18, color: color),
-              Text(
-                'Add',
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: color,
-                  fontSize: 10,
-                ),
-              ),
+              Text('Add', style: theme.textTheme.labelSmall?.copyWith(color: color, fontSize: 10)),
             ],
           ),
         ),
@@ -1220,9 +1124,7 @@ class _DecorationSourceTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final fg = selected
-        ? theme.colorScheme.primary
-        : theme.colorScheme.onSurfaceVariant;
+    final fg = selected ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(6),
@@ -1236,9 +1138,7 @@ class _DecorationSourceTile extends StatelessWidget {
               : Colors.transparent,
           borderRadius: BorderRadius.circular(6),
           border: selected
-              ? Border.all(
-                  color: theme.colorScheme.primary.withValues(alpha: 0.5),
-                )
+              ? Border.all(color: theme.colorScheme.primary.withValues(alpha: 0.5))
               : null,
         ),
         child: Row(
@@ -1345,9 +1245,7 @@ class _TabChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final fg = selected
-        ? theme.colorScheme.onSurface
-        : theme.colorScheme.onSurfaceVariant;
+    final fg = selected ? theme.colorScheme.onSurface : theme.colorScheme.onSurfaceVariant;
     return InkWell(
       onTap: onSelect,
       child: Container(
@@ -1357,17 +1255,13 @@ class _TabChip extends StatelessWidget {
         decoration: BoxDecoration(
           // The active tab shares the toolbar surface directly below it so the
           // two read as one connected panel, Chrome-style.
-          color: selected
-              ? theme.colorScheme.surfaceContainerHigh
-              : Colors.transparent,
+          color: selected ? theme.colorScheme.surfaceContainerHigh : Colors.transparent,
           border: Border(
             top: BorderSide(
               color: selected ? theme.colorScheme.primary : Colors.transparent,
               width: 2,
             ),
-            right: BorderSide(
-              color: theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
-            ),
+            right: BorderSide(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.4)),
           ),
         ),
         child: Row(

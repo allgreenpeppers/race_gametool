@@ -23,9 +23,7 @@ Future<void> main(List<String> args) async {
 
   runApp(
     ProviderScope(
-      overrides: [
-        launchArgumentsProvider.overrideWithValue(args),
-      ],
+      overrides: [launchArgumentsProvider.overrideWithValue(args)],
       child: const RaceGameToolApp(),
     ),
   );
