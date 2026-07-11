@@ -1,7 +1,7 @@
 name: race_gametool
 description: "Desktop authoring tool for a 2D top-down racing game: define assets and build levels, exported as game-ready files."
 publish_to: 'none'
-version: 0.1.8+6
+version: 0.1.9+7
 
 environment:
   sdk: ^3.12.2

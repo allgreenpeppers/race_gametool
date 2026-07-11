@@ -18,6 +18,26 @@ class AppDelegate: FlutterAppDelegate {
     return true
   }
 
+  // Workaround for flutter/flutter#155977 (fix PR #188772 not yet in stable):
+  // when the app is reactivated via Cmd-Tab or Mission Control, macOS may not
+  // deliver the occlusion-state notification, so the engine reports
+  // AppLifecycleState.hidden and the framework stops rendering frames — the
+  // window looks frozen until the Dock icon is clicked (which does trigger the
+  // notification). Becoming active with a visible window is authoritative, so
+  // push "resumed" to the framework ourselves. Remove once the upstream fix
+  // ships in the Flutter stable channel.
+  override func applicationDidBecomeActive(_ notification: Notification) {
+    super.applicationDidBecomeActive(notification)
+    guard let window = mainFlutterWindow, window.isVisible,
+      let controller = window.contentViewController as? FlutterViewController
+    else { return }
+    FlutterBasicMessageChannel(
+      name: "flutter/lifecycle",
+      binaryMessenger: controller.engine.binaryMessenger,
+      codec: FlutterStringCodec.sharedInstance()
+    ).sendMessage("AppLifecycleState.resumed")
+  }
+
   override func applicationDidFinishLaunching(_ notification: Notification) {
     NSLog("AppDelegate: applicationDidFinishLaunching start")
 

@@ -79,15 +79,15 @@ reads it directly - it reads the extracted pair (see the CLI below).
 
 A ZIP archive. Current format is **version 3**. Entries:
 
-| Entry | Purpose |
-|-------|---------|
-| `manifest.json` | Format id, version, cell size, block count. |
-| `editor.json` | Editor state for re-editing: `masks[]` and `sources[]`. |
-| `SpriteSheet.png` | The packed sprite sheet (derived). |
-| `sprite_dict.json` | The block dictionary (derived). |
-| `raw_source.png` | The first source image (legacy back-compat copy). |
-| `raw_source_<category>.png` | Raw draft image per single-image category, e.g. `raw_source_track.png`, `raw_source_island_tile.png`. |
-| `raw_source_decoration_<i>.png` | One raw image per decoration source (`_0`, `_1`, ...). |
+| Entry                             | Purpose                                                                                                  |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `manifest.json`                 | Format id, version, cell size, block count.                                                              |
+| `editor.json`                   | Editor state for re-editing:`masks[]` and `sources[]`.                                               |
+| `SpriteSheet.png`               | The packed sprite sheet (derived).                                                                       |
+| `sprite_dict.json`              | The block dictionary (derived).                                                                          |
+| `raw_source.png`                | The first source image (legacy back-compat copy).                                                        |
+| `raw_source_<category>.png`     | Raw draft image per single-image category, e.g.`raw_source_track.png`, `raw_source_island_tile.png`. |
+| `raw_source_decoration_<i>.png` | One raw image per decoration source (`_0`, `_1`, ...).                                               |
 
 `editor.json` (v3) records each draft image as a source and, for decoration,
 which image each mask came from (`decorationSourceIndex`), so the multi-image
@@ -228,6 +228,19 @@ See `AGENTS.md` for the engineering-quality guide (the layer-isolation
 invariant, `dart:ui` isolation in the model/logic layers, testing conventions,
 and style rules) that applies to all changes here.
 
+### macOS focus-freeze workaround
+
+Flutter engine bug [flutter/flutter#155977](https://github.com/flutter/flutter/issues/155977):
+when the app is reactivated via Cmd-Tab or Mission Control, macOS sometimes
+skips the occlusion-state notification, so the engine reports
+`AppLifecycleState.hidden` and the framework stops rendering - the window looks
+frozen until the Dock icon is clicked. `macos/Runner/AppDelegate.swift`
+carries an app-side workaround (`applicationDidBecomeActive` pushes
+`AppLifecycleState.resumed` over the `flutter/lifecycle` channel when the main
+window is visible), equivalent to the upstream fix in
+[PR #188772](https://github.com/flutter/flutter/pull/188772). Remove the
+override once that fix ships in the Flutter stable channel.
+
 ### File associations (`.rgpack`)
 
 Double-clicking a `.rgpack` opens it in the app (Finder "Open With" on macOS,
@@ -264,25 +277,24 @@ until code signing is added (`inno_bundle` supports a `sign_tool`).
 
 - [X] Multi-layer level editor; blocks filtered per layer.
   - [ ] Function layer (ordered check lines and walls), invisible - layer
-        exists; no placeable wall/check-line blocks yet.
+    exists; no placeable wall/check-line blocks yet.
   - [X] Decoration layer (finish line and other decoration).
   - [X] Track layer.
   - [X] Island layer.
 - [X] Cursor alignment guides (vertical/horizontal).
 - [X] Auto island generation.
   - [X] 8-direction island port marking (interior, edges, convex/concave
-        corners).
+    corners).
   - [X] Phase 1 island tile tally and set-completeness report.
   - [X] Basic generator (full convex set) and advanced (concave notches).
   - [X] Random pick when a tile kind has several variants.
   - [X] Grow the island from the track footprint and autotile by 8-neighbour
-        grass mask.
+    grass mask.
   - [X] Manual grass brush to paint/erase the island region before autotiling.
 - [X] Undo; confirm before clear-all.
 - [X] Custom desktop window frame (window_manager).
 - [X] Import map; auto-resize in Phase 1; drag-to-stamp in Phase 2.
 - [X] Browser-style tabs (pinned Phase 1 + many Phase 2 levels).
 - [X] Multiple decoration images (separate in Phase 1, merged on export).
-- [ ] Mark the drivable road area in Phase 1 (populates each block's
-      `physicsTrackArea` polygon; inside = road friction, outside = grass/sand).
-- [ ] Physics authoring (hard walls, check lines).
+- [X] Mark the drivable road area in Phase 1 (populates each block's
+  `physicsTrackArea` polygon; inside = road friction, outside = grass/sand).
