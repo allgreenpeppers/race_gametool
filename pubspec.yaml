@@ -1,5 +1,5 @@
 name: race_gametool
-description: "A new Flutter project."
+description: "Desktop authoring tool for a 2D top-down racing game: define assets and build levels, exported as game-ready files."
 publish_to: 'none'
 version: 0.1.1+2
 
@@ -20,8 +20,21 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.4
+  inno_bundle: ^0.11.2
 
 flutter:
   uses-material-design: true
   assets:
     - assets/icons/icon1024.png
+
+# Windows installer. Build it with:
+#   powershell -ExecutionPolicy Bypass -File tool\build_windows_installer.ps1
+# That wrapper runs inno_bundle in --no-installer mode, injects the .rgpack
+# file association into the generated Inno Setup script, and compiles it
+# (inno_bundle itself has no file-association option).
+inno_bundle:
+  # Stable AppId. MUST NOT change once the app has shipped to users.
+  id: 3424b49c-4fbe-43b0-bad2-f1a63af72eee
+  name: Race Game Tool
+  publisher: Race Game Tool
+  admin: false

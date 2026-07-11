@@ -1,0 +1,57 @@
+name: Build App Installer
+
+# Pushing a version tag (e.g. V0.1.1) builds the Windows installer and
+# publishes it to a GitHub Release. Can also be run manually.
+#
+# Based on inno_bundle's official CI, with one added step that injects the
+# .rgpack file association into the generated Inno Setup script (inno_bundle
+# itself has no file-association option).
+on:
+  push:
+    tags:
+      - 'V*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: '3.44.2'
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Get Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Build Windows App
+        run: |
+          flutter config --enable-windows-desktop
+          flutter pub get
+          flutter build windows --release
+
+      - name: Build iss script
+        run: dart run inno_bundle:build --no-app --release --no-installer
+
+      - name: Inject .rgpack file association
+        shell: pwsh
+        run: ./tool/inject_rgpack_association.ps1
+
+      - name: Build installer
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
+        with:
+          path: ./build/windows/x64/installer/Release/inno-script.iss
+
+      - name: Release installer
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./build/windows/x64/installer/Release/*-Installer.exe
+          generate_release_notes: true
