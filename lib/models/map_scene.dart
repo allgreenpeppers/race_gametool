@@ -1,3 +1,5 @@
+import 'function_layer.dart';
+
 /// Where the player car starts, in grid coordinates plus a facing angle
 /// in radians (0 points right, positive rotates clockwise).
 class SpawnPoint {
@@ -66,6 +68,8 @@ class MapScene {
     required this.spawnPoint,
     this.placements = const [],
     this.islandTerrain = const [],
+    this.checkLines = const [],
+    this.boundaries = const [],
   });
 
   final String mapName;
@@ -75,6 +79,9 @@ class MapScene {
   /// Row-major terrain grid: 0 = water, 1 = grass island.
   /// islandTerrain[y][x], generated via Marching Squares in the editor.
   final List<List<int>> islandTerrain;
+
+  final List<CheckLine> checkLines;
+  final List<TrackBoundary> boundaries;
 
   factory MapScene.fromJson(Map<String, dynamic> json) => MapScene(
         mapName: json['mapName'] as String,
@@ -87,6 +94,12 @@ class MapScene {
             .map((row) =>
                 (row as List<dynamic>).map((v) => v as int).toList())
             .toList(),
+        checkLines: (json['checkLines'] as List<dynamic>? ?? [])
+            .map((l) => CheckLine.fromJson(l as Map<String, dynamic>))
+            .toList(),
+        boundaries: (json['boundaries'] as List<dynamic>? ?? [])
+            .map((b) => TrackBoundary.fromJson(b as Map<String, dynamic>))
+            .toList(),
       );
 
   Map<String, dynamic> toJson() => {
@@ -94,6 +107,8 @@ class MapScene {
         'spawnPoint': spawnPoint.toJson(),
         'placements': placements.map((p) => p.toJson()).toList(),
         'islandTerrain': islandTerrain,
+        'checkLines': checkLines.map((l) => l.toJson()).toList(),
+        'boundaries': boundaries.map((b) => b.toJson()).toList(),
       };
 
   MapScene copyWith({
@@ -101,11 +116,15 @@ class MapScene {
     SpawnPoint? spawnPoint,
     List<BlockPlacement>? placements,
     List<List<int>>? islandTerrain,
+    List<CheckLine>? checkLines,
+    List<TrackBoundary>? boundaries,
   }) =>
       MapScene(
         mapName: mapName ?? this.mapName,
         spawnPoint: spawnPoint ?? this.spawnPoint,
         placements: placements ?? this.placements,
         islandTerrain: islandTerrain ?? this.islandTerrain,
+        checkLines: checkLines ?? this.checkLines,
+        boundaries: boundaries ?? this.boundaries,
       );
 }

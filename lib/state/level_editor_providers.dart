@@ -11,6 +11,8 @@ import '../logic/island_tiles.dart';
 import '../models/block_def.dart';
 import '../models/map_scene.dart';
 import '../models/port.dart';
+import '../models/function_layer.dart';
+import '../logic/function_layer_generator.dart';
 import 'app_providers.dart';
 
 /// Interaction tools for the Phase 2 level canvas.
@@ -1405,15 +1407,25 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
 
   void setMapName(String name) => state = state.copyWith(mapName: name);
 
-  /// Builds the exportable scene from the current editor state. Island
-  /// terrain is empty until the island generator is added.
-  MapScene buildScene() => MapScene(
-        mapName: state.mapName,
-        spawnPoint: state.spawn ??
-            const SpawnPoint(gridX: 0, gridY: 0, facingAngle: 0),
-        placements: state.placements,
-        islandTerrain: const [],
-      );
+  /// Builds the exportable scene from the current editor state.
+  MapScene buildScene() {
+    final (checkLines, boundaries) = FunctionLayerGenerator.generate(
+      placements: state.placements,
+      defOf: _def,
+      settings: const FunctionLayerSettings(),
+      islandGrassMask: state.islandGrassMask,
+    );
+
+    return MapScene(
+      mapName: state.mapName,
+      spawnPoint: state.spawn ??
+          const SpawnPoint(gridX: 0, gridY: 0, facingAngle: 0),
+      placements: state.placements,
+      islandTerrain: const [],
+      checkLines: checkLines,
+      boundaries: boundaries,
+    );
+  }
 
   Future<void> openGameLevel(String path) async {
     final file = File(path);

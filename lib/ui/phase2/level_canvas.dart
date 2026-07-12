@@ -8,6 +8,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants.dart';
 import '../../models/block_def.dart';
 import '../../models/map_scene.dart';
+import '../../models/function_layer.dart';
+import '../../logic/function_layer_generator.dart';
 import '../../state/app_providers.dart';
 import '../../state/level_editor_providers.dart';
 import '../widgets/block_thumbnail.dart';
@@ -445,6 +447,85 @@ class _LevelPainter extends CustomPainter {
     _paintGroupMove(canvas);
     _paintMarquee(canvas);
     _paintSpawn(canvas);
+
+    // Automatically paint the generated check lines and boundaries on all layers
+    // so the user gets real-time feedback (drawn dimmer when not on the Function layer).
+    _paintGeneratedFunctionData(canvas, opacity: activeLayer == MapLayer.function ? 1.0 : 0.3);
+  }
+
+  void _paintGeneratedFunctionData(Canvas canvas, {required double opacity}) {
+    // Generate check lines and boundaries on the fly
+    final (checkLines, boundaries) = FunctionLayerGenerator.generate(
+      placements: placements,
+      defOf: (id) => blocks.blockById(id),
+      settings: const FunctionLayerSettings(), // Uses default settings for visual preview
+      islandGrassMask: islandGrassMask,
+    );
+
+    // 1. Draw Check Lines
+    final checkPaint = Paint()
+      ..color = Colors.cyanAccent.withValues(alpha: opacity)
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke;
+
+    final arrowPaint = Paint()
+      ..color = Colors.cyanAccent.withValues(alpha: opacity)
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round;
+
+    for (final cl in checkLines) {
+      canvas.drawLine(
+        Offset(cl.p1.x, cl.p1.y),
+        Offset(cl.p2.x, cl.p2.y),
+        checkPaint,
+      );
+
+      // Draw direction arrow at the center
+      final center = Offset((cl.p1.x + cl.p2.x) / 2.0, (cl.p1.y + cl.p2.y) / 2.0);
+      final angle = math.atan2(cl.forwardVector.y, cl.forwardVector.x);
+      final arrowLen = _cell * 0.5;
+      final tip = center + Offset(math.cos(angle), math.sin(angle)) * arrowLen;
+      canvas.drawLine(center, tip, arrowPaint);
+      for (final side in [2.5, -2.5]) {
+        final wing = tip + Offset(math.cos(angle + side), math.sin(angle + side)) * arrowLen * 0.4;
+        canvas.drawLine(tip, wing, arrowPaint);
+      }
+    }
+
+    // 2. Draw Track Boundaries
+    for (final tb in boundaries) {
+      if (tb.vertices.isEmpty) continue;
+
+      final Color boundaryColor;
+      final double strokeWidth;
+
+      if (tb.type == 'antiCutRed') {
+        boundaryColor = Colors.redAccent;
+        strokeWidth = 2.5;
+      } else if (tb.type == 'innerFunction') {
+        boundaryColor = Colors.orangeAccent;
+        strokeWidth = 1.5;
+      } else {
+        boundaryColor = Colors.indigoAccent;
+        strokeWidth = 2.0;
+      }
+
+      final paint = Paint()
+        ..color = boundaryColor.withValues(alpha: opacity)
+        ..strokeWidth = strokeWidth
+        ..style = PaintingStyle.stroke;
+
+      final path = Path();
+      path.moveTo(tb.vertices.first.x, tb.vertices.first.y);
+      for (var i = 1; i < tb.vertices.length; i++) {
+        path.lineTo(tb.vertices[i].x, tb.vertices[i].y);
+      }
+      if (tb.isClosed) {
+        path.close();
+      }
+
+      canvas.drawPath(path, paint);
+    }
   }
 
   void _paintAlignmentGuides(Canvas canvas, Size size) {

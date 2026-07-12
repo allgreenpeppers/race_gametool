@@ -255,6 +255,12 @@ Explorer double-click on Windows). The path is forwarded into Phase 1.
   patches the generated `inno-script.iss` before it is compiled. Uninstalling
   removes the association.
 
+
+
+
+
+
+
 ### Releases (CI)
 
 Pushing a `V*` tag (e.g. `V0.1.1`) runs `.github/workflows/release.yml`, which
