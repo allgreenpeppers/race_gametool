@@ -1054,7 +1054,11 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       return;
     }
 
-    // Populate the shared library from the same bundle we just wrote.
+    // Populate the shared library from the same bundle we just wrote, so
+    // Phase 2 always reflects the latest save. The file is saved regardless,
+    // but a failed hand-off must be visible, not silent: a stale Phase 2
+    // palette is exactly the bug a swallowed error here produces.
+    String? handOffError;
     try {
       final data = readAssetBundle(bundleBytes);
       await ref
@@ -1064,15 +1068,16 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
             sheetBytes: data.sheetBytes,
             sourceName: suggestedName,
           );
-    } on Object {
-      // Non-fatal: the file is saved regardless of the in-memory hand-off.
+    } on Object catch (e) {
+      handOffError = e.toString();
     }
 
     state = state.copyWith(
       isDirty: false,
       currentFilePath: () => path,
-      statusMessage: () =>
-          'Saved ${state.allMasks.length} blocks to $path (available in Phase 2)',
+      statusMessage: () => handOffError == null
+          ? 'Saved ${state.allMasks.length} blocks to $path (available in Phase 2)'
+          : 'Saved to $path, but Phase 2 could not load it: $handOffError',
     );
   }
 
@@ -1113,7 +1118,11 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       return;
     }
 
-    // Populate the shared library from the same bundle we just wrote.
+    // Populate the shared library from the same bundle we just wrote, so
+    // Phase 2 always reflects the latest save. The file is saved regardless,
+    // but a failed hand-off must be visible, not silent: a stale Phase 2
+    // palette is exactly the bug a swallowed error here produces.
+    String? handOffError;
     try {
       final data = readAssetBundle(bundleBytes);
       await ref
@@ -1123,15 +1132,16 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
             sheetBytes: data.sheetBytes,
             sourceName: path.split('/').last,
           );
-    } on Object {
-      // Non-fatal: the file is saved regardless of the in-memory hand-off.
+    } on Object catch (e) {
+      handOffError = e.toString();
     }
 
     state = state.copyWith(
       isDirty: false,
       currentFilePath: () => path,
-      statusMessage: () =>
-          'Saved ${state.allMasks.length} blocks to $path (available in Phase 2)',
+      statusMessage: () => handOffError == null
+          ? 'Saved ${state.allMasks.length} blocks to $path (available in Phase 2)'
+          : 'Saved to $path, but Phase 2 could not load it: $handOffError',
     );
   }
 

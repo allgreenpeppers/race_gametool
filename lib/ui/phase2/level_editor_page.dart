@@ -1,41 +1,23 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../logic/asset_bundle.dart';
 import '../../state/app_providers.dart';
 import '../../state/level_editor_providers.dart';
 import '../widgets/block_thumbnail.dart';
 import 'diagnostics_panel.dart';
 import 'level_canvas.dart';
 
-/// Phase 2: load a .rgpack bundle into a palette, stamp blocks on the grid
-/// canvas, then (in later steps) route ports, generate the island, and
-/// export the map scene.
+/// Phase 2: stamp palette blocks on the grid canvas, route ports, generate
+/// the island, and export the map scene. The palette is fed by the shared
+/// asset library, which File > Open Config and every Phase 1 save refresh;
+/// there is deliberately no separate import path that could go stale.
 class LevelEditorPage extends ConsumerWidget {
   const LevelEditorPage({super.key, required this.tabId});
 
   /// Which workspace tab (and thus which `levelEditorProvider` instance) this
   /// page edits.
   final int tabId;
-
-  Future<void> _importBundle(WidgetRef ref) async {
-    final result = await FilePicker.pickFiles(
-      dialogTitle: 'Import asset bundle',
-      type: FileType.custom,
-      allowedExtensions: ['rgpack'],
-      withData: true,
-    );
-    final bytes = result?.files.single.bytes;
-    if (bytes == null) return;
-    final data = readAssetBundle(bytes);
-    await ref.read(assetLibraryProvider.notifier).loadAssets(
-          blocks: data.blocks,
-          sheetBytes: data.sheetBytes,
-          sourceName: result!.files.single.name,
-        );
-  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -48,7 +30,6 @@ class LevelEditorPage extends ConsumerWidget {
       children: [
         _Palette(
           tabId: tabId,
-          onImport: () => _importBundle(ref),
           selectedId: state.selectedPaletteId,
           onSelect: notifier.selectPalette,
         ),
@@ -60,7 +41,8 @@ class LevelEditorPage extends ConsumerWidget {
                 child: library.isEmpty
                     ? Center(
                         child: Text(
-                          'Import a .rgpack bundle to start building a level',
+                          'Open a config (File > Open Config...) to start '
+                          'building a level',
                           style: theme.textTheme.bodyLarge,
                         ),
                       )
@@ -100,13 +82,11 @@ class LevelEditorPage extends ConsumerWidget {
 class _Palette extends StatelessWidget {
   const _Palette({
     required this.tabId,
-    required this.onImport,
     required this.selectedId,
     required this.onSelect,
   });
 
   final int tabId;
-  final VoidCallback onImport;
   final String? selectedId;
   final void Function(String id) onSelect;
 
@@ -130,19 +110,8 @@ class _Palette extends StatelessWidget {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text('Block Palette',
-                          style: theme.textTheme.titleMedium),
-                    ),
-                    IconButton(
-                      tooltip: 'Import bundle (.rgpack)',
-                      icon: const Icon(Icons.folder_open),
-                      onPressed: onImport,
-                    ),
-                  ],
-                ),
+                child:
+                    Text('Block Palette', style: theme.textTheme.titleMedium),
               ),
               if (library.sourceName != null)
                 Padding(
@@ -156,8 +125,8 @@ class _Palette extends StatelessWidget {
                         child: Padding(
                           padding: const EdgeInsets.all(16),
                           child: Text(
-                            'No blocks loaded. Save a bundle in Phase 1, or '
-                            'import a .rgpack here.',
+                            'No blocks loaded. Open a config via File > '
+                            'Open Config..., or save one in Phase 1.',
                             textAlign: TextAlign.center,
                             style: theme.textTheme.bodySmall,
                           ),
