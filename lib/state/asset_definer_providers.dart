@@ -1436,23 +1436,38 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
             state.curveDraftPoints.isNotEmpty);
 
     if (!drawingStarted) {
-      final cellX = (localPos.dx / GridConstants.cellSize).floor();
-      final cellY = (localPos.dy / GridConstants.cellSize).floor();
-      int? hitIndex;
-      for (var i = state.masks.length - 1; i >= 0; i--) {
-        if (state.masks[i].containsCell(cellX, cellY)) {
-          hitIndex = i;
-          break;
+      // A tap on the current block's own edge belongs to the current block.
+      // The cell hit-test below floors an exact boundary coordinate into the
+      // neighboring block, which used to steal boundary clicks by switching
+      // selection -- making a boundary start point (and closing on a boundary
+      // first vertex) impossible next to an adjacent block.
+      final onCurrentBlock = currentMask != null &&
+          maskContainsLocalPoint(
+            Vec2(
+              localPos.dx - currentMask.gridX * GridConstants.cellSize,
+              localPos.dy - currentMask.gridY * GridConstants.cellSize,
+            ),
+            currentMask,
+          );
+      if (!onCurrentBlock) {
+        final cellX = (localPos.dx / GridConstants.cellSize).floor();
+        final cellY = (localPos.dy / GridConstants.cellSize).floor();
+        int? hitIndex;
+        for (var i = state.masks.length - 1; i >= 0; i--) {
+          if (state.masks[i].containsCell(cellX, cellY)) {
+            hitIndex = i;
+            break;
+          }
         }
+        // Tapping a different block selects it (empty area -> draw mode,
+        // existing area -> view mode). Tapping the current block falls
+        // through to place the first point when already in draw mode.
+        if (hitIndex != null && hitIndex != currentIndex) {
+          selectMask(hitIndex);
+          return;
+        }
+        if (currentIndex == null) return;
       }
-      // Tapping a different block selects it (empty area -> draw mode, existing
-      // area -> view mode). Tapping the current block falls through to place
-      // the first point when already in draw mode.
-      if (hitIndex != null && hitIndex != currentIndex) {
-        selectMask(hitIndex);
-        return;
-      }
-      if (currentIndex == null) return;
     }
 
     // A block is selected but not in draw mode: taps do nothing until the user

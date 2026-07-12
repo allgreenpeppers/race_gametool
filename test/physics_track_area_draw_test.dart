@@ -193,6 +193,49 @@ void main() {
       expect(read().selectedIndex, 0);
     });
 
+    test('a tap on the shared boundary stays on the current block', () {
+      // Two ADJACENT 1x1 masks: block 0 at pixels 0..16, block 1 at 16..32.
+      // The shared boundary x=16 floors into block 1's cell, which used to
+      // switch selection instead of placing the start point there.
+      notifier.setActiveCategory(BlockCategory.islandTile);
+      notifier.setTool(Phase1Tool.drawBox);
+      notifier.tapCell(0, 0);
+      notifier.tapCell(1, 0);
+      notifier.setTool(Phase1Tool.drawPhysicsArea);
+      notifier.setSnapToGrid(false);
+      notifier.selectMask(0);
+
+      notifier.trackAreaTap(const ui.Offset(16, 8)); // on the boundary
+      expect(read().selectedIndex, 0, reason: 'must not switch to block 1');
+      expect(area(), [const Vec2(16, 8)]);
+
+      // Strictly inside the neighbor still switches (before points lock it).
+      notifier.undoPhysicsAreaVertex();
+      notifier.trackAreaTap(const ui.Offset(24, 8));
+      expect(read().selectedIndex, 1);
+    });
+
+    test('auto-complete works on a boundary first vertex', () {
+      notifier.setActiveCategory(BlockCategory.islandTile);
+      notifier.setTool(Phase1Tool.drawBox);
+      notifier.tapCell(0, 0);
+      notifier.tapCell(1, 0);
+      notifier.setTool(Phase1Tool.drawPhysicsArea);
+      notifier.setSnapToGrid(false);
+      notifier.selectMask(0);
+
+      notifier.trackAreaTap(const ui.Offset(16, 2)); // first vertex on edge
+      notifier.trackAreaTap(const ui.Offset(2, 2));
+      notifier.trackAreaTap(const ui.Offset(2, 14));
+
+      // Clicking the boundary first vertex closes the shape.
+      notifier.trackAreaTap(const ui.Offset(16, 2));
+      expect(read().physicsDrawing, isFalse);
+      expect(read().selectedIndex, isNull);
+      final masks = read().masks;
+      expect(masks.first.physicsTrackArea.length, 3);
+    });
+
     test('in view mode, tapping another block switches', () {
       seedTwoMasks();
       notifier.selectMask(0);

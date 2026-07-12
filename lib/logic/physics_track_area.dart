@@ -13,14 +13,17 @@ String? validatePhysicsTrackArea(MaskDraft mask) {
   if (!isSimplePolygon(vertices)) return 'must be a simple polygon';
 
   for (final vertex in vertices) {
-    if (!_isInsideMask(vertex, mask)) {
+    if (!maskContainsLocalPoint(vertex, mask)) {
       return 'has a point outside the mask shape';
     }
   }
   return null;
 }
 
-bool _isInsideMask(Vec2 point, MaskDraft mask) {
+/// Whether a point in the mask's local pixel space lies inside the mask
+/// shape, edges inclusive. Edge-inclusive matters: physics-area vertices
+/// may sit exactly on the block boundary.
+bool maskContainsLocalPoint(Vec2 point, MaskDraft mask) {
   if (!point.x.isFinite || !point.y.isFinite) return false;
 
   final cell = GridConstants.cellSize;
