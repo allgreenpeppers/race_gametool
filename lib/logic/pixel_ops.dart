@@ -19,8 +19,10 @@ enum SymmetryMode {
   const SymmetryMode(this.jsonValue);
   final String jsonValue;
 
-  static SymmetryMode fromJson(String value) => SymmetryMode.values
-      .firstWhere((m) => m.jsonValue == value, orElse: () => SymmetryMode.none);
+  static SymmetryMode fromJson(String value) => SymmetryMode.values.firstWhere(
+    (m) => m.jsonValue == value,
+    orElse: () => SymmetryMode.none,
+  );
 }
 
 /// The mirrored copies of a point under [mode], including the point itself.
@@ -31,11 +33,11 @@ List<(int, int)> symmetryPoints(int x, int y, int w, int h, SymmetryMode mode) {
     SymmetryMode.horizontal => [(x, y), (w - 1 - x, y)],
     SymmetryMode.vertical => [(x, y), (x, h - 1 - y)],
     SymmetryMode.both => [
-        (x, y),
-        (w - 1 - x, y),
-        (x, h - 1 - y),
-        (w - 1 - x, h - 1 - y),
-      ],
+      (x, y),
+      (w - 1 - x, y),
+      (x, h - 1 - y),
+      (w - 1 - x, h - 1 - y),
+    ],
   };
 }
 
@@ -50,10 +52,65 @@ bool colorWithinTolerance(int a, int b, int tolerance) {
       diff(0).abs() <= tolerance;
 }
 
+int _textureHash(int x, int y) {
+  var value = x * 0x1f1f1f1f ^ y * 0x45d9f3b;
+  value ^= value >>> 16;
+  value *= 0x45d9f3b;
+  value ^= value >>> 16;
+  return value & 0x7fffffff;
+}
+
+/// Applies a stable, clustered light/dark variation to [color]. The pattern
+/// is derived from canvas coordinates, so repainting or reopening never
+/// changes the texture. Alpha is retained exactly.
+int texturedFillColor(int color, int x, int y, int strength) {
+  final amount = strength.clamp(0, 32);
+  if (amount == 0) return color;
+  final cluster = _textureHash(x ~/ 2, y ~/ 2) % 9;
+  final level = switch (cluster) {
+    0 => -2,
+    1 || 2 => -1,
+    3 || 4 => 1,
+    5 => 2,
+    _ => 0,
+  };
+  if (level == 0) return color;
+  final delta = (amount * level / 2).round();
+  int adjust(int channel) => (channel + delta).clamp(0, 255);
+  return ((color >>> 24) << 24) |
+      (adjust((color >>> 16) & 0xff) << 16) |
+      (adjust((color >>> 8) & 0xff) << 8) |
+      adjust(color & 0xff);
+}
+
+/// Most frequent non-transparent colors, useful as a pick-only palette when
+/// importing an existing image. Ties are stable by ARGB value.
+List<int> frequentOpaqueColors(Uint32List pixels, {int limit = 256}) {
+  if (limit <= 0) return const [];
+  final counts = <int, int>{};
+  for (final color in pixels) {
+    if ((color >>> 24) == 0) continue;
+    counts.update(color, (count) => count + 1, ifAbsent: () => 1);
+  }
+  final entries = counts.entries.toList()
+    ..sort((a, b) {
+      final frequency = b.value.compareTo(a.value);
+      return frequency != 0 ? frequency : a.key.compareTo(b.key);
+    });
+  return [for (final entry in entries.take(limit)) entry.key];
+}
+
 bool _writable(Uint8List? mask, int index) => mask == null || mask[index] != 0;
 
-void _set(Uint32List buf, int w, int h, int x, int y, int color,
-    Uint8List? mask) {
+void _set(
+  Uint32List buf,
+  int w,
+  int h,
+  int x,
+  int y,
+  int color,
+  Uint8List? mask,
+) {
   if (x < 0 || y < 0 || x >= w || y >= h) return;
   final i = y * w + x;
   if (_writable(mask, i)) buf[i] = color;
@@ -62,8 +119,16 @@ void _set(Uint32List buf, int w, int h, int x, int y, int color,
 /// Stamps a square brush of side [brushSize]. The brush extends from the
 /// anchor pixel toward the bottom-right for even sizes so a size-1 brush is
 /// exactly the hovered pixel.
-void stampBrush(Uint32List buf, int w, int h, int x, int y, int color,
-    {int brushSize = 1, Uint8List? mask}) {
+void stampBrush(
+  Uint32List buf,
+  int w,
+  int h,
+  int x,
+  int y,
+  int color, {
+  int brushSize = 1,
+  Uint8List? mask,
+}) {
   final start = -(brushSize - 1) ~/ 2;
   for (var dy = start; dy < start + brushSize; dy++) {
     for (var dx = start; dx < start + brushSize; dx++) {
@@ -73,9 +138,18 @@ void stampBrush(Uint32List buf, int w, int h, int x, int y, int color,
 }
 
 /// Bresenham line, stamped with the brush at every step.
-void drawLine(Uint32List buf, int w, int h, int x0, int y0, int x1, int y1,
-    int color,
-    {int brushSize = 1, Uint8List? mask}) {
+void drawLine(
+  Uint32List buf,
+  int w,
+  int h,
+  int x0,
+  int y0,
+  int x1,
+  int y1,
+  int color, {
+  int brushSize = 1,
+  Uint8List? mask,
+}) {
   var x = x0, y = y0;
   final dx = (x1 - x0).abs(), dy = -(y1 - y0).abs();
   final sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
@@ -96,9 +170,19 @@ void drawLine(Uint32List buf, int w, int h, int x0, int y0, int x1, int y1,
 }
 
 /// Axis-aligned rectangle between two corners (any order), outline or filled.
-void drawRectShape(Uint32List buf, int w, int h, int x0, int y0, int x1,
-    int y1, int color,
-    {bool filled = false, int brushSize = 1, Uint8List? mask}) {
+void drawRectShape(
+  Uint32List buf,
+  int w,
+  int h,
+  int x0,
+  int y0,
+  int x1,
+  int y1,
+  int color, {
+  bool filled = false,
+  int brushSize = 1,
+  Uint8List? mask,
+}) {
   final left = x0 < x1 ? x0 : x1, right = x0 < x1 ? x1 : x0;
   final top = y0 < y1 ? y0 : y1, bottom = y0 < y1 ? y1 : y0;
   if (filled) {
@@ -109,21 +193,71 @@ void drawRectShape(Uint32List buf, int w, int h, int x0, int y0, int x1,
     }
     return;
   }
-  drawLine(buf, w, h, left, top, right, top, color,
-      brushSize: brushSize, mask: mask);
-  drawLine(buf, w, h, right, top, right, bottom, color,
-      brushSize: brushSize, mask: mask);
-  drawLine(buf, w, h, right, bottom, left, bottom, color,
-      brushSize: brushSize, mask: mask);
-  drawLine(buf, w, h, left, bottom, left, top, color,
-      brushSize: brushSize, mask: mask);
+  drawLine(
+    buf,
+    w,
+    h,
+    left,
+    top,
+    right,
+    top,
+    color,
+    brushSize: brushSize,
+    mask: mask,
+  );
+  drawLine(
+    buf,
+    w,
+    h,
+    right,
+    top,
+    right,
+    bottom,
+    color,
+    brushSize: brushSize,
+    mask: mask,
+  );
+  drawLine(
+    buf,
+    w,
+    h,
+    right,
+    bottom,
+    left,
+    bottom,
+    color,
+    brushSize: brushSize,
+    mask: mask,
+  );
+  drawLine(
+    buf,
+    w,
+    h,
+    left,
+    bottom,
+    left,
+    top,
+    color,
+    brushSize: brushSize,
+    mask: mask,
+  );
 }
 
 /// Ellipse inscribed in the rectangle between two corners (any order).
 /// Integer midpoint algorithm (Zingl), correct for even and odd diameters.
-void drawEllipseShape(Uint32List buf, int w, int h, int rx0, int ry0, int rx1,
-    int ry1, int color,
-    {bool filled = false, int brushSize = 1, Uint8List? mask}) {
+void drawEllipseShape(
+  Uint32List buf,
+  int w,
+  int h,
+  int rx0,
+  int ry0,
+  int rx1,
+  int ry1,
+  int color, {
+  bool filled = false,
+  int brushSize = 1,
+  Uint8List? mask,
+}) {
   var x0 = rx0 < rx1 ? rx0 : rx1, x1 = rx0 < rx1 ? rx1 : rx0;
   var y0 = ry0 < ry1 ? ry0 : ry1, y1 = ry0 < ry1 ? ry1 : ry0;
 
@@ -191,17 +325,31 @@ void drawEllipseShape(Uint32List buf, int w, int h, int rx0, int ry0, int rx1,
 /// Bucket fill. Contiguous mode flood-fills the 4-connected region around
 /// the seed; non-contiguous mode recolors every matching pixel (this doubles
 /// as the color-replace tool). Matching uses [tolerance] against the seed
-/// pixel's color; writes respect [mask].
-void floodFill(Uint32List buf, int w, int h, int x, int y, int color,
-    {int tolerance = 0, bool contiguous = true, Uint8List? mask}) {
+/// pixel's color; writes respect [mask]. A non-zero [shadeStrength] applies
+/// a stable Minecraft-like light/dark texture around [color].
+void floodFill(
+  Uint32List buf,
+  int w,
+  int h,
+  int x,
+  int y,
+  int color, {
+  int tolerance = 0,
+  bool contiguous = true,
+  Uint8List? mask,
+  int shadeStrength = 0,
+}) {
   if (x < 0 || y < 0 || x >= w || y >= h) return;
   final target = buf[y * w + x];
-  if (tolerance <= 0 && target == color && contiguous) return;
+  if (tolerance <= 0 && target == color && contiguous && shadeStrength <= 0) {
+    return;
+  }
 
   if (!contiguous) {
     for (var i = 0; i < buf.length; i++) {
-      if (_writable(mask, i) && colorWithinTolerance(buf[i], target, tolerance)) {
-        buf[i] = color;
+      if (_writable(mask, i) &&
+          colorWithinTolerance(buf[i], target, tolerance)) {
+        buf[i] = texturedFillColor(color, i % w, i ~/ w, shadeStrength);
       }
     }
     return;
@@ -213,9 +361,16 @@ void floodFill(Uint32List buf, int w, int h, int x, int y, int color,
   while (queue.isNotEmpty) {
     final i = queue.removeFirst();
     if (!colorWithinTolerance(buf[i], target, tolerance)) continue;
-    if (_writable(mask, i)) buf[i] = color;
     final px = i % w, py = i ~/ w;
-    for (final (nx, ny) in [(px - 1, py), (px + 1, py), (px, py - 1), (px, py + 1)]) {
+    if (_writable(mask, i)) {
+      buf[i] = texturedFillColor(color, px, py, shadeStrength);
+    }
+    for (final (nx, ny) in [
+      (px - 1, py),
+      (px + 1, py),
+      (px, py - 1),
+      (px, py + 1),
+    ]) {
       if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
       final ni = ny * w + nx;
       if (visited[ni] == 0) {
@@ -228,8 +383,15 @@ void floodFill(Uint32List buf, int w, int h, int x, int y, int color,
 
 /// Magic-wand selection: the mask of pixels matching the seed color, either
 /// the 4-connected region (contiguous) or globally.
-Uint8List magicWandMask(Uint32List buf, int w, int h, int x, int y,
-    {int tolerance = 0, bool contiguous = true}) {
+Uint8List magicWandMask(
+  Uint32List buf,
+  int w,
+  int h,
+  int x,
+  int y, {
+  int tolerance = 0,
+  bool contiguous = true,
+}) {
   final out = Uint8List(w * h);
   if (x < 0 || y < 0 || x >= w || y >= h) return out;
   final target = buf[y * w + x];
@@ -252,7 +414,12 @@ Uint8List magicWandMask(Uint32List buf, int w, int h, int x, int y,
       continue;
     }
     final px = i % w, py = i ~/ w;
-    for (final (nx, ny) in [(px - 1, py), (px + 1, py), (px, py - 1), (px, py + 1)]) {
+    for (final (nx, ny) in [
+      (px - 1, py),
+      (px + 1, py),
+      (px, py - 1),
+      (px, py + 1),
+    ]) {
       if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
       final ni = ny * w + nx;
       if (visited[ni] == 0) {
@@ -328,8 +495,13 @@ Uint8List polygonMask(int w, int h, List<(double, double)> points) {
 /// Copies the masked pixels out of [buf] into a tight buffer and clears them
 /// from the source ("lift" for a floating selection). Returns the lifted
 /// buffer; its dimensions are those of [maskBounds].
-Uint32List liftMaskedPixels(Uint32List buf, int w, int h, Uint8List mask,
-    (int, int, int, int) bounds) {
+Uint32List liftMaskedPixels(
+  Uint32List buf,
+  int w,
+  int h,
+  Uint8List mask,
+  (int, int, int, int) bounds,
+) {
   final (left, top, right, bottom) = bounds;
   final lw = right - left + 1, lh = bottom - top + 1;
   final out = Uint32List(lw * lh);
@@ -347,8 +519,16 @@ Uint32List liftMaskedPixels(Uint32List buf, int w, int h, Uint8List mask,
 
 /// Stamps [src] (dimensions [sw] x [sh]) onto [buf] at (dx, dy), skipping
 /// fully transparent source pixels so lifted content keeps its silhouette.
-void blit(Uint32List buf, int w, int h, Uint32List src, int sw, int sh,
-    int dx, int dy) {
+void blit(
+  Uint32List buf,
+  int w,
+  int h,
+  Uint32List src,
+  int sw,
+  int sh,
+  int dx,
+  int dy,
+) {
   for (var y = 0; y < sh; y++) {
     final ty = dy + y;
     if (ty < 0 || ty >= h) continue;
@@ -362,8 +542,7 @@ void blit(Uint32List buf, int w, int h, Uint32List src, int sw, int sh,
 }
 
 /// Nearest-neighbor scale, the only resampling appropriate for pixel art.
-Uint32List scaleNearest(
-    Uint32List src, int sw, int sh, int dw, int dh) {
+Uint32List scaleNearest(Uint32List src, int sw, int sh, int dw, int dh) {
   final out = Uint32List(dw * dh);
   for (var y = 0; y < dh; y++) {
     final sy = (y * sh) ~/ dh;
@@ -416,13 +595,20 @@ void flipVertical(Uint32List buf, int w, int h) {
 /// Copies [src] into a canvas of the new size. Anchor components are -1
 /// (align start), 0 (center), or 1 (align end) and pick which existing
 /// content edge stays put when growing or cropping.
-Uint32List resizeCanvas(Uint32List src, int sw, int sh, int dw, int dh,
-    {int anchorX = -1, int anchorY = -1}) {
+Uint32List resizeCanvas(
+  Uint32List src,
+  int sw,
+  int sh,
+  int dw,
+  int dh, {
+  int anchorX = -1,
+  int anchorY = -1,
+}) {
   int offset(int s, int d, int anchor) => switch (anchor) {
-        -1 => 0,
-        0 => (d - s) ~/ 2,
-        _ => d - s,
-      };
+    -1 => 0,
+    0 => (d - s) ~/ 2,
+    _ => d - s,
+  };
   final out = Uint32List(dw * dh);
   final ox = offset(sw, dw, anchorX), oy = offset(sh, dh, anchorY);
   for (var y = 0; y < sh; y++) {
@@ -438,8 +624,12 @@ Uint32List resizeCanvas(Uint32List src, int sw, int sh, int dw, int dh,
 }
 
 /// Crops [src] to the inclusive box, returning the new buffer.
-Uint32List cropCanvas(Uint32List src, int sw, int sh,
-    (int, int, int, int) bounds) {
+Uint32List cropCanvas(
+  Uint32List src,
+  int sw,
+  int sh,
+  (int, int, int, int) bounds,
+) {
   final (left, top, right, bottom) = bounds;
   final dw = right - left + 1, dh = bottom - top + 1;
   final out = Uint32List(dw * dh);

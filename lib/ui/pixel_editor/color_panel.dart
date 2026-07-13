@@ -8,7 +8,9 @@ import '../../state/pixel_editor_providers.dart';
 /// sliders, and the indexed palette (tap to pick, right-click to remove,
 /// import/export as JASC .pal).
 class ColorPanel extends ConsumerStatefulWidget {
-  const ColorPanel({super.key});
+  const ColorPanel({super.key, required this.tabId});
+
+  final int tabId;
 
   @override
   ConsumerState<ColorPanel> createState() => _ColorPanelState();
@@ -25,7 +27,7 @@ class _ColorPanelState extends ConsumerState<ColorPanel> {
   @override
   void initState() {
     super.initState();
-    _syncFrom(ref.read(pixelEditorProvider).color);
+    _syncFrom(ref.read(pixelEditorProvider(widget.tabId)).color);
   }
 
   @override
@@ -36,8 +38,7 @@ class _ColorPanelState extends ConsumerState<ColorPanel> {
 
   void _syncFrom(int argb) {
     _lastSeenColor = argb;
-    _hexController.text =
-        argb.toRadixString(16).padLeft(8, '0').toUpperCase();
+    _hexController.text = argb.toRadixString(16).padLeft(8, '0').toUpperCase();
     final color = Color(argb);
     final hsv = HSVColor.fromColor(color);
     // Preserve the local hue when the color is achromatic.
@@ -54,7 +55,7 @@ class _ColorPanelState extends ConsumerState<ColorPanel> {
     final argb = hsv.toColor().toARGB32();
     _lastSeenColor = argb;
     _hexController.text = argb.toRadixString(16).padLeft(8, '0').toUpperCase();
-    ref.read(pixelEditorProvider.notifier).setColor(argb);
+    ref.read(pixelEditorProvider(widget.tabId).notifier).setColor(argb);
   }
 
   void _applyHex(String text) {
@@ -62,15 +63,22 @@ class _ColorPanelState extends ConsumerState<ColorPanel> {
     if (s.length == 6) s = 'FF$s';
     final value = int.tryParse(s, radix: 16);
     if (value == null || s.length != 8) return;
-    ref.read(pixelEditorProvider.notifier).setColor(value);
+    ref.read(pixelEditorProvider(widget.tabId).notifier).setColor(value);
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final color = ref.watch(pixelEditorProvider.select((s) => s.color));
-    final palette = ref.watch(pixelEditorProvider.select((s) => s.palette));
-    final notifier = ref.read(pixelEditorProvider.notifier);
+    final color = ref.watch(
+      pixelEditorProvider(widget.tabId).select((s) => s.color),
+    );
+    final palette = ref.watch(
+      pixelEditorProvider(widget.tabId).select((s) => s.palette),
+    );
+    final imageColors = ref.watch(
+      pixelEditorProvider(widget.tabId).select((s) => s.imageColors),
+    );
+    final notifier = ref.read(pixelEditorProvider(widget.tabId).notifier);
 
     if (color != _lastSeenColor) _syncFrom(color);
 
@@ -103,8 +111,7 @@ class _ColorPanelState extends ConsumerState<ColorPanel> {
                   ),
                   style: theme.textTheme.bodySmall,
                   inputFormatters: [
-                    FilteringTextInputFormatter.allow(
-                        RegExp(r'[0-9a-fA-F#]')),
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9a-fA-F#]')),
                     LengthLimitingTextInputFormatter(9),
                   ],
                   onSubmitted: _applyHex,
@@ -135,12 +142,60 @@ class _ColorPanelState extends ConsumerState<ColorPanel> {
           _GradientSlider(
             label: 'V',
             value: _hsv.value,
-            colors: [
-              _hsv.withValue(0).toColor(),
-              _hsv.withValue(1).toColor(),
-            ],
+            colors: [_hsv.withValue(0).toColor(), _hsv.withValue(1).toColor()],
             onChanged: (v) => _applyHsv(_hsv.withValue(v)),
           ),
+          if (imageColors.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Image Colors',
+                    style: theme.textTheme.titleSmall,
+                  ),
+                ),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 16,
+                  tooltip: 'Refresh colors from canvas',
+                  icon: const Icon(Icons.refresh),
+                  onPressed: notifier.refreshImageColors,
+                ),
+              ],
+            ),
+            Text(
+              'Most frequent colors; click to pick.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 4,
+              runSpacing: 4,
+              children: [
+                for (final imageColor in imageColors)
+                  GestureDetector(
+                    onTap: () => notifier.setColor(imageColor),
+                    child: Container(
+                      width: 22,
+                      height: 22,
+                      decoration: BoxDecoration(
+                        color: Color(imageColor),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          width: imageColor == color ? 2 : 1,
+                          color: imageColor == color
+                              ? theme.colorScheme.primary
+                              : theme.colorScheme.outlineVariant,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
           const SizedBox(height: 16),
           Row(
             children: [
@@ -173,8 +228,9 @@ class _ColorPanelState extends ConsumerState<ColorPanel> {
           const SizedBox(height: 4),
           Text(
             'Click to pick, right-click to remove.',
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
           const SizedBox(height: 8),
           Wrap(
@@ -238,7 +294,8 @@ class _GradientSlider extends StatelessWidget {
             child: LayoutBuilder(
               builder: (context, constraints) {
                 void handle(Offset local) => onChanged(
-                    (local.dx / constraints.maxWidth).clamp(0.0, 1.0));
+                  (local.dx / constraints.maxWidth).clamp(0.0, 1.0),
+                );
                 return GestureDetector(
                   onTapDown: (d) => handle(d.localPosition),
                   onHorizontalDragUpdate: (d) => handle(d.localPosition),
@@ -247,8 +304,9 @@ class _GradientSlider extends StatelessWidget {
                     decoration: BoxDecoration(
                       gradient: LinearGradient(colors: colors),
                       borderRadius: BorderRadius.circular(4),
-                      border:
-                          Border.all(color: theme.colorScheme.outlineVariant),
+                      border: Border.all(
+                        color: theme.colorScheme.outlineVariant,
+                      ),
                     ),
                     child: Align(
                       alignment: Alignment((value * 2 - 1).clamp(-1.0, 1.0), 0),

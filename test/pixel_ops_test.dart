@@ -13,8 +13,9 @@ void main() {
 
   Uint32List buf(int w, int h) => Uint32List(w * h);
 
-  List<int> row(Uint32List pixels, int w, int y) =>
-      [for (var x = 0; x < w; x++) pixels[y * w + x]];
+  List<int> row(Uint32List pixels, int w, int y) => [
+    for (var x = 0; x < w; x++) pixels[y * w + x],
+  ];
 
   group('stampBrush', () {
     test('size 1 paints exactly the anchor pixel', () {
@@ -90,10 +91,16 @@ void main() {
       // Horizontal and vertical symmetry.
       for (var y = 0; y < h; y++) {
         for (var x = 0; x < w; x++) {
-          expect(p[y * w + x], p[y * w + (w - 1 - x)],
-              reason: 'x-symmetry at ($x,$y)');
-          expect(p[y * w + x], p[(h - 1 - y) * w + x],
-              reason: 'y-symmetry at ($x,$y)');
+          expect(
+            p[y * w + x],
+            p[y * w + (w - 1 - x)],
+            reason: 'x-symmetry at ($x,$y)',
+          );
+          expect(
+            p[y * w + x],
+            p[(h - 1 - y) * w + x],
+            reason: 'y-symmetry at ($x,$y)',
+          );
         }
       }
       expect(row(p, w, 3), List.filled(7, r));
@@ -115,7 +122,8 @@ void main() {
           final i = y * w + x;
           if (outline[i] == r) expect(filled[i], r);
           if (filled[i] != r) continue;
-          final boundary = x == 0 ||
+          final boundary =
+              x == 0 ||
               y == 0 ||
               x == w - 1 ||
               y == h - 1 ||
@@ -151,6 +159,33 @@ void main() {
       expect(p[1], r);
     });
 
+    test('shade variation is deterministic and preserves the base alpha', () {
+      final first = buf(6, 6);
+      final second = buf(6, 6);
+      const grass = 0xff6aa84f;
+
+      floodFill(first, 6, 6, 0, 0, grass, shadeStrength: 16);
+      floodFill(second, 6, 6, 0, 0, grass, shadeStrength: 16);
+
+      expect(first.toList(), second.toList());
+      expect(first.toSet().length, greaterThan(1));
+      expect(first.every((color) => (color >>> 24) == 0xff), isTrue);
+      expect(first, isNot(everyElement(grass)));
+    });
+
+    test(
+      'shade variation applies when the target already has the base color',
+      () {
+        const grass = 0xff6aa84f;
+        final p = Uint32List.fromList(List.filled(16, grass));
+
+        floodFill(p, 4, 4, 0, 0, grass, shadeStrength: 16);
+
+        expect(p.toSet().length, greaterThan(1));
+        expect(p.every((color) => (color >>> 24) == 0xff), isTrue);
+      },
+    );
+
     test('non-contiguous mode recolors matching pixels everywhere', () {
       final p = buf(3, 1);
       p[0] = r;
@@ -164,9 +199,13 @@ void main() {
       final p = buf(4, 1);
       final mask = Uint8List.fromList([1, 0, 0, 1]);
       floodFill(p, 4, 1, 0, 0, r, mask: mask);
-      expect(p.toList(), [r, t, t, r],
-          reason: 'region is all-transparent so it spans the row; only '
-              'masked pixels get written');
+      expect(
+        p.toList(),
+        [r, t, t, r],
+        reason:
+            'region is all-transparent so it spans the row; only '
+            'masked pixels get written',
+      );
     });
   });
 
@@ -281,7 +320,9 @@ void main() {
       expect(grown[0], 0);
 
       final cropped = resizeCanvas(p, 2, 2, 1, 1, anchorX: 0, anchorY: 0);
-      expect(cropped.toList(), [r], reason: 'center crop keeps top-left of 2x2');
+      expect(cropped.toList(), [
+        r,
+      ], reason: 'center crop keeps top-left of 2x2');
     });
 
     test('cropCanvas extracts the inclusive box', () {
@@ -293,12 +334,20 @@ void main() {
 
   group('symmetry and tolerance helpers', () {
     test('symmetryPoints mirrors around the pixel-exact center', () {
-      expect(symmetryPoints(1, 0, 4, 3, SymmetryMode.horizontal),
-          [(1, 0), (2, 0)]);
-      expect(symmetryPoints(0, 0, 3, 3, SymmetryMode.both),
-          [(0, 0), (2, 0), (0, 2), (2, 2)]);
-      expect(symmetryPoints(1, 1, 3, 3, SymmetryMode.both),
-          everyElement((1, 1)));
+      expect(symmetryPoints(1, 0, 4, 3, SymmetryMode.horizontal), [
+        (1, 0),
+        (2, 0),
+      ]);
+      expect(symmetryPoints(0, 0, 3, 3, SymmetryMode.both), [
+        (0, 0),
+        (2, 0),
+        (0, 2),
+        (2, 2),
+      ]);
+      expect(
+        symmetryPoints(1, 1, 3, 3, SymmetryMode.both),
+        everyElement((1, 1)),
+      );
     });
 
     test('colorWithinTolerance compares all channels including alpha', () {
@@ -307,5 +356,17 @@ void main() {
       expect(colorWithinTolerance(0xff102030, 0xff102040, 15), isFalse);
       expect(colorWithinTolerance(0xff102030, 0xff102040, 16), isTrue);
     });
+  });
+
+  test('frequentOpaqueColors ranks colors and skips transparency', () {
+    final pixels = Uint32List.fromList([
+      0xffff0000,
+      0xff0000ff,
+      0xffff0000,
+      0x00000000,
+      0xff00ff00,
+      0xffff0000,
+    ]);
+    expect(frequentOpaqueColors(pixels, limit: 2), [0xffff0000, 0xff0000ff]);
   });
 }

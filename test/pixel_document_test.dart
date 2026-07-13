@@ -44,26 +44,23 @@ void main() {
   });
 
   group('rgpix format', () {
-    test('encode/decode round-trips document, palette, and settings', () {
+    test('encode/decode round-trips document and palette', () {
       final doc = PixelDocument.blank(3, 2);
       doc.layers[0].pixels.setAll(0, [1, 2, 3, 0xff804020, 5, 6]);
       final file = RgpixFile(
         document: doc,
         palette: const [0xff112233, 0x80ffffff],
-        showPixelGrid: false,
-        showCellGrid: true,
-        symmetry: 'xy',
       );
 
       final decoded = RgpixFile.decode(file.encode());
       expect(decoded.document.width, 3);
       expect(decoded.document.height, 2);
-      expect(decoded.document.layers.single.pixels.toList(),
-          doc.layers.single.pixels.toList());
+      expect(
+        decoded.document.layers.single.pixels.toList(),
+        doc.layers.single.pixels.toList(),
+      );
       expect(decoded.palette, const [0xff112233, 0x80ffffff]);
-      expect(decoded.showPixelGrid, isFalse);
-      expect(decoded.showCellGrid, isTrue);
-      expect(decoded.symmetry, 'xy');
+      expect(file.encode(), isNot(contains('settings')));
     });
 
     test('multi-layer documents survive the round-trip', () {
@@ -71,10 +68,7 @@ void main() {
         width: 1,
         height: 1,
         layers: [
-          PixelLayer(
-            name: 'a',
-            pixels: Uint32List.fromList([0xff000001]),
-          ),
+          PixelLayer(name: 'a', pixels: Uint32List.fromList([0xff000001])),
           PixelLayer(
             name: 'b',
             visible: false,
@@ -91,17 +85,35 @@ void main() {
     });
 
     test('rejects foreign or corrupt payloads', () {
-      expect(() => RgpixFile.decode('{"format":"other"}'),
-          throwsFormatException);
-      expect(() => RgpixFile.decode('not json at all'),
-          throwsFormatException);
+      expect(
+        () => RgpixFile.decode('{"format":"other"}'),
+        throwsFormatException,
+      );
+      expect(() => RgpixFile.decode('not json at all'), throwsFormatException);
 
       final doc = PixelDocument.blank(2, 2);
-      final tampered = RgpixFile(document: doc)
-          .encode()
-          .replaceFirst('"width": 2', '"width": 3');
-      expect(() => RgpixFile.decode(tampered), throwsFormatException,
-          reason: 'layer pixel count no longer matches the dimensions');
+      final tampered = RgpixFile(
+        document: doc,
+      ).encode().replaceFirst('"width": 2', '"width": 3');
+      expect(
+        () => RgpixFile.decode(tampered),
+        throwsFormatException,
+        reason: 'layer pixel count no longer matches the dimensions',
+      );
+    });
+
+    test('rejects fields with invalid JSON types as format errors', () {
+      const invalidPixels = '''
+{"format":"rgpix","version":1,"width":1,"height":1,
+ "layers":[{"pixels":42}]}
+''';
+      const invalidPalette = '''
+{"format":"rgpix","version":1,"width":1,"height":1,
+ "layers":[{"pixels":"AAAAAA=="}],"palette":[42]}
+''';
+
+      expect(() => RgpixFile.decode(invalidPixels), throwsFormatException);
+      expect(() => RgpixFile.decode(invalidPalette), throwsFormatException);
     });
   });
 
@@ -112,15 +124,15 @@ void main() {
     });
 
     test('parses files with plain LF endings too', () {
-      expect(decodeJascPal('JASC-PAL\n0100\n1\n0 128 255\n'),
-          [0xff0080ff]);
+      expect(decodeJascPal('JASC-PAL\n0100\n1\n0 128 255\n'), [0xff0080ff]);
     });
 
     test('rejects wrong headers and short files', () {
-      expect(() => decodeJascPal('RIFF-PAL\n0100\n0\n'),
-          throwsFormatException);
-      expect(() => decodeJascPal('JASC-PAL\n0100\n2\n1 2 3\n'),
-          throwsFormatException);
+      expect(() => decodeJascPal('RIFF-PAL\n0100\n0\n'), throwsFormatException);
+      expect(
+        () => decodeJascPal('JASC-PAL\n0100\n2\n1 2 3\n'),
+        throwsFormatException,
+      );
     });
   });
 }

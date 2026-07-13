@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image/image.dart' as img;
 
@@ -32,20 +35,158 @@ enum PixelTool {
   final String label;
 }
 
+enum ShapeInteractionMode { drag, planned }
+
 const _minCanvasSide = 1;
 const _maxCanvasSide = 1024;
+
+/// Session-wide Pixel Editor preferences shared by every document tab. These
+/// affect editing behavior or presentation, not the saved pixel document.
+class PixelEditorPreferences {
+  const PixelEditorPreferences({
+    this.brushSize = 1,
+    this.fillTolerance = 0,
+    this.fillContiguous = true,
+    this.fillShadeEnabled = false,
+    this.fillShadeStrength = 12,
+    this.symmetry = SymmetryMode.none,
+    this.showPixelGrid = true,
+    this.showCellGrid = true,
+    this.shapeMode = ShapeInteractionMode.drag,
+  });
+
+  final int brushSize;
+  final int fillTolerance;
+  final bool fillContiguous;
+  final bool fillShadeEnabled;
+  final int fillShadeStrength;
+  final SymmetryMode symmetry;
+  final bool showPixelGrid;
+  final bool showCellGrid;
+  final ShapeInteractionMode shapeMode;
+
+  PixelEditorPreferences copyWith({
+    int? brushSize,
+    int? fillTolerance,
+    bool? fillContiguous,
+    bool? fillShadeEnabled,
+    int? fillShadeStrength,
+    SymmetryMode? symmetry,
+    bool? showPixelGrid,
+    bool? showCellGrid,
+    ShapeInteractionMode? shapeMode,
+  }) => PixelEditorPreferences(
+    brushSize: brushSize ?? this.brushSize,
+    fillTolerance: fillTolerance ?? this.fillTolerance,
+    fillContiguous: fillContiguous ?? this.fillContiguous,
+    fillShadeEnabled: fillShadeEnabled ?? this.fillShadeEnabled,
+    fillShadeStrength: fillShadeStrength ?? this.fillShadeStrength,
+    symmetry: symmetry ?? this.symmetry,
+    showPixelGrid: showPixelGrid ?? this.showPixelGrid,
+    showCellGrid: showCellGrid ?? this.showCellGrid,
+    shapeMode: shapeMode ?? this.shapeMode,
+  );
+}
+
+class PixelEditorPreferencesNotifier extends Notifier<PixelEditorPreferences> {
+  @override
+  PixelEditorPreferences build() => const PixelEditorPreferences();
+
+  void setBrushSize(int size) =>
+      state = state.copyWith(brushSize: size.clamp(1, 32));
+
+  void setFillTolerance(int tolerance) =>
+      state = state.copyWith(fillTolerance: tolerance.clamp(0, 255));
+
+  void setFillContiguous(bool contiguous) =>
+      state = state.copyWith(fillContiguous: contiguous);
+
+  void setFillShadeEnabled(bool enabled) =>
+      state = state.copyWith(fillShadeEnabled: enabled);
+
+  void setFillShadeStrength(int strength) =>
+      state = state.copyWith(fillShadeStrength: strength.clamp(1, 32));
+
+  void setSymmetry(SymmetryMode mode) => state = state.copyWith(symmetry: mode);
+
+  void togglePixelGrid() =>
+      state = state.copyWith(showPixelGrid: !state.showPixelGrid);
+
+  void toggleCellGrid() =>
+      state = state.copyWith(showCellGrid: !state.showCellGrid);
+
+  void setShapeMode(ShapeInteractionMode mode) =>
+      state = state.copyWith(shapeMode: mode);
+}
+
+final pixelEditorPreferencesProvider =
+    NotifierProvider<PixelEditorPreferencesNotifier, PixelEditorPreferences>(
+      PixelEditorPreferencesNotifier.new,
+    );
+
+class PixelClipboardData {
+  PixelClipboardData({
+    required Uint32List pixels,
+    required this.width,
+    required this.height,
+  }) : pixels = Uint32List.fromList(pixels);
+
+  final Uint32List pixels;
+  final int width;
+  final int height;
+}
+
+class PixelClipboardNotifier extends Notifier<PixelClipboardData?> {
+  @override
+  PixelClipboardData? build() => null;
+
+  void setPixels(Uint32List pixels, int width, int height) {
+    state = PixelClipboardData(pixels: pixels, width: width, height: height);
+  }
+}
+
+/// Keeps pixel data available between editor tabs while also mirroring it to
+/// the system clipboard for interoperability outside the app.
+final pixelClipboardProvider =
+    NotifierProvider<PixelClipboardNotifier, PixelClipboardData?>(
+      PixelClipboardNotifier.new,
+    );
 
 /// DawnBringer 32, a common general-purpose pixel-art palette; the default
 /// palette for new sessions.
 const defaultPixelPalette = <int>[
-  0xff000000, 0xff222034, 0xff45283c, 0xff663931,
-  0xff8f563b, 0xffdf7126, 0xffd9a066, 0xffeec39a,
-  0xfffbf236, 0xff99e550, 0xff6abe30, 0xff37946e,
-  0xff4b692f, 0xff524b24, 0xff323c39, 0xff3f3f74,
-  0xff306082, 0xff5b6ee1, 0xff639bff, 0xff5fcde4,
-  0xffcbdbfc, 0xffffffff, 0xff9badb7, 0xff847e87,
-  0xff696a6a, 0xff595652, 0xff76428a, 0xffac3232,
-  0xffd95763, 0xffd77bba, 0xff8f974a, 0xff8a6f30,
+  0xff000000,
+  0xff222034,
+  0xff45283c,
+  0xff663931,
+  0xff8f563b,
+  0xffdf7126,
+  0xffd9a066,
+  0xffeec39a,
+  0xfffbf236,
+  0xff99e550,
+  0xff6abe30,
+  0xff37946e,
+  0xff4b692f,
+  0xff524b24,
+  0xff323c39,
+  0xff3f3f74,
+  0xff306082,
+  0xff5b6ee1,
+  0xff639bff,
+  0xff5fcde4,
+  0xffcbdbfc,
+  0xffffffff,
+  0xff9badb7,
+  0xff847e87,
+  0xff696a6a,
+  0xff595652,
+  0xff76428a,
+  0xffac3232,
+  0xffd95763,
+  0xffd77bba,
+  0xff8f974a,
+  0xff8a6f30,
 ];
 
 /// Selection pixels lifted off the layer, movable and scalable before being
@@ -82,23 +223,53 @@ class FloatingSelection {
     Uint32List? original,
     int? originalWidth,
     int? originalHeight,
-  }) =>
-      FloatingSelection(
-        pixels: pixels ?? this.pixels,
-        width: width ?? this.width,
-        height: height ?? this.height,
-        offsetX: offsetX ?? this.offsetX,
-        offsetY: offsetY ?? this.offsetY,
-        original: original ?? this.original,
-        originalWidth: originalWidth ?? this.originalWidth,
-        originalHeight: originalHeight ?? this.originalHeight,
-      );
+  }) => FloatingSelection(
+    pixels: pixels ?? this.pixels,
+    width: width ?? this.width,
+    height: height ?? this.height,
+    offsetX: offsetX ?? this.offsetX,
+    offsetY: offsetY ?? this.offsetY,
+    original: original ?? this.original,
+    originalWidth: originalWidth ?? this.originalWidth,
+    originalHeight: originalHeight ?? this.originalHeight,
+  );
 }
 
 /// The in-progress rectangle of a Select Rectangle drag, in pixel coords.
 class SelectDraft {
   const SelectDraft(this.x0, this.y0, this.x1, this.y1);
   final int x0, y0, x1, y1;
+}
+
+/// Adjustable inclusive bounds for rectangle/ellipse planned mode.
+class ShapePlan {
+  const ShapePlan({
+    required this.left,
+    required this.top,
+    required this.right,
+    required this.bottom,
+  });
+
+  final int left;
+  final int top;
+  final int right;
+  final int bottom;
+
+  ShapePlan copyWith({int? left, int? top, int? right, int? bottom}) =>
+      ShapePlan(
+        left: left ?? this.left,
+        top: top ?? this.top,
+        right: right ?? this.right,
+        bottom: bottom ?? this.bottom,
+      );
+}
+
+/// The Asset Definer source updated by an embedded Pixel Editor tab.
+class AssetPixelTarget {
+  const AssetPixelTarget({required this.category, this.decorationIndex});
+
+  final BlockCategory category;
+  final int? decorationIndex;
 }
 
 class _Snapshot {
@@ -113,12 +284,7 @@ class PixelEditorState {
     this.tool = PixelTool.pencil,
     this.color = 0xff000000,
     this.palette = defaultPixelPalette,
-    this.brushSize = 1,
-    this.fillTolerance = 0,
-    this.fillContiguous = true,
-    this.symmetry = SymmetryMode.none,
-    this.showPixelGrid = true,
-    this.showCellGrid = true,
+    this.imageColors = const [],
     this.canvasImage,
     this.floatingImage,
     this.revision = 0,
@@ -126,8 +292,11 @@ class PixelEditorState {
     this.floating,
     this.selectDraft,
     this.lassoDraft,
+    this.shapePlan,
     this.isDirty = false,
     this.filePath,
+    this.displayName = 'Untitled Pixel',
+    this.assetTarget,
     this.statusMessage,
     this.canUndo = false,
     this.canRedo = false,
@@ -142,18 +311,8 @@ class PixelEditorState {
   /// The indexed palette, ARGB entries.
   final List<int> palette;
 
-  final int brushSize;
-
-  /// Fill tool matching tolerance, 0..255 per channel.
-  final int fillTolerance;
-
-  /// Fill tool: true flood-fills the connected region, false recolors every
-  /// matching pixel (color replace).
-  final bool fillContiguous;
-
-  final SymmetryMode symmetry;
-  final bool showPixelGrid;
-  final bool showCellGrid;
+  /// Pick-only colors extracted from an imported/current image.
+  final List<int> imageColors;
 
   /// Composited document, rebuilt after every change; what the canvas draws.
   final ui.Image? canvasImage;
@@ -174,9 +333,12 @@ class PixelEditorState {
 
   /// Lasso polygon vertices collected during the drag, in pixel coords.
   final List<(double, double)>? lassoDraft;
+  final ShapePlan? shapePlan;
 
   final bool isDirty;
   final String? filePath;
+  final String displayName;
+  final AssetPixelTarget? assetTarget;
   final String? statusMessage;
   final bool canUndo;
   final bool canRedo;
@@ -186,12 +348,7 @@ class PixelEditorState {
     PixelTool? tool,
     int? color,
     List<int>? palette,
-    int? brushSize,
-    int? fillTolerance,
-    bool? fillContiguous,
-    SymmetryMode? symmetry,
-    bool? showPixelGrid,
-    bool? showCellGrid,
+    List<int>? imageColors,
     ui.Image? Function()? canvasImage,
     ui.Image? Function()? floatingImage,
     int? revision,
@@ -199,38 +356,36 @@ class PixelEditorState {
     FloatingSelection? Function()? floating,
     SelectDraft? Function()? selectDraft,
     List<(double, double)>? Function()? lassoDraft,
+    ShapePlan? Function()? shapePlan,
     bool? isDirty,
     String? Function()? filePath,
+    String? displayName,
+    AssetPixelTarget? Function()? assetTarget,
     String? Function()? statusMessage,
     bool? canUndo,
     bool? canRedo,
-  }) =>
-      PixelEditorState(
-        document: document ?? this.document,
-        tool: tool ?? this.tool,
-        color: color ?? this.color,
-        palette: palette ?? this.palette,
-        brushSize: brushSize ?? this.brushSize,
-        fillTolerance: fillTolerance ?? this.fillTolerance,
-        fillContiguous: fillContiguous ?? this.fillContiguous,
-        symmetry: symmetry ?? this.symmetry,
-        showPixelGrid: showPixelGrid ?? this.showPixelGrid,
-        showCellGrid: showCellGrid ?? this.showCellGrid,
-        canvasImage: canvasImage != null ? canvasImage() : this.canvasImage,
-        floatingImage:
-            floatingImage != null ? floatingImage() : this.floatingImage,
-        revision: revision ?? this.revision,
-        selection: selection != null ? selection() : this.selection,
-        floating: floating != null ? floating() : this.floating,
-        selectDraft: selectDraft != null ? selectDraft() : this.selectDraft,
-        lassoDraft: lassoDraft != null ? lassoDraft() : this.lassoDraft,
-        isDirty: isDirty ?? this.isDirty,
-        filePath: filePath != null ? filePath() : this.filePath,
-        statusMessage:
-            statusMessage != null ? statusMessage() : this.statusMessage,
-        canUndo: canUndo ?? this.canUndo,
-        canRedo: canRedo ?? this.canRedo,
-      );
+  }) => PixelEditorState(
+    document: document ?? this.document,
+    tool: tool ?? this.tool,
+    color: color ?? this.color,
+    palette: palette ?? this.palette,
+    imageColors: imageColors ?? this.imageColors,
+    canvasImage: canvasImage != null ? canvasImage() : this.canvasImage,
+    floatingImage: floatingImage != null ? floatingImage() : this.floatingImage,
+    revision: revision ?? this.revision,
+    selection: selection != null ? selection() : this.selection,
+    floating: floating != null ? floating() : this.floating,
+    selectDraft: selectDraft != null ? selectDraft() : this.selectDraft,
+    lassoDraft: lassoDraft != null ? lassoDraft() : this.lassoDraft,
+    shapePlan: shapePlan != null ? shapePlan() : this.shapePlan,
+    isDirty: isDirty ?? this.isDirty,
+    filePath: filePath != null ? filePath() : this.filePath,
+    displayName: displayName ?? this.displayName,
+    assetTarget: assetTarget != null ? assetTarget() : this.assetTarget,
+    statusMessage: statusMessage != null ? statusMessage() : this.statusMessage,
+    canUndo: canUndo ?? this.canUndo,
+    canRedo: canRedo ?? this.canRedo,
+  );
 }
 
 class PixelEditorNotifier extends Notifier<PixelEditorState> {
@@ -249,28 +404,59 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
   // Move-tool drag bookkeeping.
   (int, int)? _moveGrabOffset;
   int? _scaleCorner; // 0 TL, 1 TR, 2 BL, 3 BR
+  int? _shapePlanEdge; // 0 left, 1 top, 2 right, 3 bottom
+  bool _selectionAdditive = false;
+  bool? _dirtyBeforeFloating;
 
   int _imageGeneration = 0;
   int _floatingGeneration = 0;
+  Timer? _rebuildTimer;
+  PixelDocument? _pendingRebuildDocument;
+  ui.Image? _ownedCanvasImage;
+  ui.Image? _ownedFloatingImage;
   bool _disposed = false;
 
   @override
   PixelEditorState build() {
-    ref.onDispose(() => _disposed = true);
-    final state = PixelEditorState(document: PixelDocument.blank(128, 128));
-    _scheduleRebuild(state.document);
-    return state;
+    ref.onDispose(() {
+      _disposed = true;
+      _rebuildTimer?.cancel();
+      _pendingRebuildDocument = null;
+      _ownedCanvasImage?.dispose();
+      _ownedFloatingImage?.dispose();
+    });
+    final initialState = PixelEditorState(
+      document: PixelDocument.blank(128, 128),
+    );
+    _scheduleRebuild(initialState.document);
+    return initialState;
   }
 
   PixelLayer get _layer => state.document.layers.first;
   int get _w => state.document.width;
   int get _h => state.document.height;
+  PixelEditorPreferences get _preferences =>
+      ref.read(pixelEditorPreferencesProvider);
 
   // --- Image cache ----------------------------------------------------------
 
   /// Rebuilds the composited canvas image asynchronously. A generation
-  /// counter drops stale results when edits outpace decoding.
+  /// counter drops stale results when edits outpace decoding. Pointer updates
+  /// are coalesced to one rebuild per display-frame interval so a fast stroke
+  /// does not repeatedly composite and decode the same canvas state.
   void _scheduleRebuild(PixelDocument document) {
+    _pendingRebuildDocument = document;
+    if (_rebuildTimer != null) return;
+    _rebuildTimer = Timer(const Duration(milliseconds: 16), () {
+      _rebuildTimer = null;
+      final pending = _pendingRebuildDocument;
+      _pendingRebuildDocument = null;
+      if (_disposed || pending == null) return;
+      _decodeCanvasImage(pending);
+    });
+  }
+
+  void _decodeCanvasImage(PixelDocument document) {
     final generation = ++_imageGeneration;
     final bytes = pixelsToRgbaBytes(document.composite());
     ui.decodeImageFromPixels(
@@ -283,7 +469,8 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
           image.dispose();
           return;
         }
-        state.canvasImage?.dispose();
+        _ownedCanvasImage?.dispose();
+        _ownedCanvasImage = image;
         state = state.copyWith(
           canvasImage: () => image,
           revision: state.revision + 1,
@@ -295,7 +482,8 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
   void _scheduleFloatingRebuild(FloatingSelection? floating) {
     final generation = ++_floatingGeneration;
     if (floating == null) {
-      state.floatingImage?.dispose();
+      _ownedFloatingImage?.dispose();
+      _ownedFloatingImage = null;
       state = state.copyWith(
         floatingImage: () => null,
         revision: state.revision + 1,
@@ -312,7 +500,8 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
           image.dispose();
           return;
         }
-        state.floatingImage?.dispose();
+        _ownedFloatingImage?.dispose();
+        _ownedFloatingImage = image;
         state = state.copyWith(
           floatingImage: () => image,
           revision: state.revision + 1,
@@ -333,10 +522,12 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
   // --- History --------------------------------------------------------------
 
   void _pushUndo() {
-    _undoStack.add(_Snapshot(
-      state.document.clone(),
-      state.selection == null ? null : Uint8List.fromList(state.selection!),
-    ));
+    _undoStack.add(
+      _Snapshot(
+        state.document.clone(),
+        state.selection == null ? null : Uint8List.fromList(state.selection!),
+      ),
+    );
     if (_undoStack.length > _historyCap) _undoStack.removeAt(0);
     _redoStack.clear();
     state = state.copyWith(canUndo: true, canRedo: false);
@@ -349,10 +540,12 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     // _commitFloating may itself have pushed nothing; the floating case is
     // committed as part of the state being undone.
     if (_undoStack.isEmpty) return;
-    _redoStack.add(_Snapshot(
-      state.document.clone(),
-      state.selection == null ? null : Uint8List.fromList(state.selection!),
-    ));
+    _redoStack.add(
+      _Snapshot(
+        state.document.clone(),
+        state.selection == null ? null : Uint8List.fromList(state.selection!),
+      ),
+    );
     final snapshot = _undoStack.removeLast();
     state = state.copyWith(
       document: snapshot.document,
@@ -367,10 +560,12 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
   void redo() {
     if (_strokeBase != null || state.lassoDraft != null) return;
     if (_redoStack.isEmpty) return;
-    _undoStack.add(_Snapshot(
-      state.document.clone(),
-      state.selection == null ? null : Uint8List.fromList(state.selection!),
-    ));
+    _undoStack.add(
+      _Snapshot(
+        state.document.clone(),
+        state.selection == null ? null : Uint8List.fromList(state.selection!),
+      ),
+    );
     final snapshot = _redoStack.removeLast();
     state = state.copyWith(
       document: snapshot.document,
@@ -384,44 +579,71 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
 
   // --- Settings -------------------------------------------------------------
 
+  bool _isSelectionTool(PixelTool tool) =>
+      tool == PixelTool.selectRect ||
+      tool == PixelTool.lasso ||
+      tool == PixelTool.wand ||
+      tool == PixelTool.move;
+
   void setTool(PixelTool tool) {
-    if (tool != PixelTool.move) _commitFloating();
+    final keepsSelection = _isSelectionTool(tool);
+    if (!keepsSelection) _commitFloating();
     state = state.copyWith(
       tool: tool,
+      selection: keepsSelection ? null : () => null,
       selectDraft: () => null,
       lassoDraft: () => null,
+      shapePlan: () => null,
       statusMessage: () => tool.label,
     );
+    _shapePlanEdge = null;
   }
 
   void setColor(int argb) => state = state.copyWith(color: argb);
 
   void setBrushSize(int size) =>
-      state = state.copyWith(brushSize: size.clamp(1, 8));
+      ref.read(pixelEditorPreferencesProvider.notifier).setBrushSize(size);
 
-  void setFillTolerance(int tolerance) =>
-      state = state.copyWith(fillTolerance: tolerance.clamp(0, 255));
+  void setFillTolerance(int tolerance) => ref
+      .read(pixelEditorPreferencesProvider.notifier)
+      .setFillTolerance(tolerance);
 
-  void setFillContiguous(bool contiguous) =>
-      state = state.copyWith(fillContiguous: contiguous);
+  void setFillContiguous(bool contiguous) => ref
+      .read(pixelEditorPreferencesProvider.notifier)
+      .setFillContiguous(contiguous);
 
-  void setSymmetry(SymmetryMode mode) => state = state.copyWith(
-        symmetry: mode,
-        statusMessage: () => 'Symmetry: ${mode.jsonValue}',
-      );
+  void setFillShadeEnabled(bool enabled) => ref
+      .read(pixelEditorPreferencesProvider.notifier)
+      .setFillShadeEnabled(enabled);
+
+  void setFillShadeStrength(int strength) => ref
+      .read(pixelEditorPreferencesProvider.notifier)
+      .setFillShadeStrength(strength);
+
+  void setSymmetry(SymmetryMode mode) {
+    if (_preferences.symmetry == mode) return;
+    ref.read(pixelEditorPreferencesProvider.notifier).setSymmetry(mode);
+    state = state.copyWith(statusMessage: () => 'Symmetry: ${mode.jsonValue}');
+  }
 
   void togglePixelGrid() =>
-      state = state.copyWith(showPixelGrid: !state.showPixelGrid);
+      ref.read(pixelEditorPreferencesProvider.notifier).togglePixelGrid();
 
   void toggleCellGrid() =>
-      state = state.copyWith(showCellGrid: !state.showCellGrid);
+      ref.read(pixelEditorPreferencesProvider.notifier).toggleCellGrid();
+
+  void setShapeMode(ShapeInteractionMode mode) {
+    ref.read(pixelEditorPreferencesProvider.notifier).setShapeMode(mode);
+    if (mode == ShapeInteractionMode.drag) cancelShapePlan();
+  }
 
   // --- Palette --------------------------------------------------------------
 
   void addCurrentColorToPalette() {
     if (state.palette.contains(state.color)) {
       state = state.copyWith(
-          statusMessage: () => 'Color already in the palette');
+        statusMessage: () => 'Color already in the palette',
+      );
       return;
     }
     state = state.copyWith(
@@ -457,7 +679,8 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
       );
     } on FormatException catch (e) {
       state = state.copyWith(
-          statusMessage: () => 'Palette import failed: ${e.message}');
+        statusMessage: () => 'Palette import failed: ${e.message}',
+      );
     }
   }
 
@@ -492,21 +715,136 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
   /// Esc: drop a floating selection back where it was lifted from, else
   /// deselect.
   void cancelFloatingOrSelection() {
+    if (state.shapePlan != null) {
+      cancelShapePlan();
+      return;
+    }
     if (state.floating != null) {
       // The lift pushed an undo snapshot; restoring it is the cancel.
       final snapshot = _undoStack.removeLast();
+      final wasDirty = _dirtyBeforeFloating ?? state.isDirty;
+      _dirtyBeforeFloating = null;
       state = state.copyWith(
         document: snapshot.document,
         selection: () => snapshot.selection,
         floating: () => null,
+        isDirty: wasDirty,
         canUndo: _undoStack.isNotEmpty,
         statusMessage: () => 'Move cancelled',
       );
       _scheduleFloatingRebuild(null);
-      _touch();
+      _touch(dirty: false);
       return;
     }
     if (state.selection != null) clearSelection();
+  }
+
+  Future<void> copySelection() async {
+    Uint32List pixels;
+    int width;
+    int height;
+    final floating = state.floating;
+    if (floating != null) {
+      pixels = Uint32List.fromList(floating.pixels);
+      width = floating.width;
+      height = floating.height;
+    } else {
+      final selection = state.selection;
+      if (selection == null) {
+        state = state.copyWith(statusMessage: () => 'Nothing selected');
+        return;
+      }
+      final bounds = maskBounds(selection, _w, _h);
+      if (bounds == null) return;
+      final copy = Uint32List.fromList(_layer.pixels);
+      pixels = liftMaskedPixels(copy, _w, _h, selection, bounds);
+      width = bounds.$3 - bounds.$1 + 1;
+      height = bounds.$4 - bounds.$2 + 1;
+    }
+    final payload = jsonEncode({
+      'format': 'race_gametool.pixel_clipboard',
+      'version': 1,
+      'width': width,
+      'height': height,
+      'pixels': base64Encode(pixelsToRgbaBytes(pixels)),
+    });
+    ref.read(pixelClipboardProvider.notifier).setPixels(pixels, width, height);
+    await Clipboard.setData(ClipboardData(text: payload));
+    state = state.copyWith(statusMessage: () => 'Copied selection');
+  }
+
+  Future<void> cutSelection() async {
+    if (state.selection == null && state.floating == null) return;
+    await copySelection();
+    deleteSelectionContents();
+    state = state.copyWith(statusMessage: () => 'Cut selection');
+  }
+
+  Future<void> pasteSelection() async {
+    try {
+      final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+      PixelClipboardData? clipboard;
+      if (text != null) {
+        final payload = jsonDecode(text);
+        if (payload is! Map<String, dynamic> ||
+            payload['format'] != 'race_gametool.pixel_clipboard' ||
+            payload['version'] != 1) {
+          throw const FormatException('not pixel data');
+        }
+        final width = payload['width'];
+        final height = payload['height'];
+        final encoded = payload['pixels'];
+        if (width is! int ||
+            height is! int ||
+            width <= 0 ||
+            height <= 0 ||
+            width > _maxCanvasSide ||
+            height > _maxCanvasSide ||
+            encoded is! String) {
+          throw const FormatException('invalid pixel clipboard');
+        }
+        final pixels = rgbaBytesToPixels(base64Decode(encoded));
+        if (pixels.length != width * height) {
+          throw const FormatException('pixel clipboard size mismatch');
+        }
+        clipboard = PixelClipboardData(
+          pixels: pixels,
+          width: width,
+          height: height,
+        );
+      } else {
+        clipboard = ref.read(pixelClipboardProvider);
+      }
+      if (clipboard == null) return;
+
+      _commitFloating(silent: true);
+      _dirtyBeforeFloating = state.isDirty;
+      _pushUndo();
+      final floating = FloatingSelection(
+        pixels: Uint32List.fromList(clipboard.pixels),
+        width: clipboard.width,
+        height: clipboard.height,
+        offsetX: (_w - clipboard.width) ~/ 2,
+        offsetY: (_h - clipboard.height) ~/ 2,
+        original: Uint32List.fromList(clipboard.pixels),
+        originalWidth: clipboard.width,
+        originalHeight: clipboard.height,
+      );
+      state = state.copyWith(
+        tool: PixelTool.selectRect,
+        selection: () => null,
+        floating: () => floating,
+        shapePlan: () => null,
+        isDirty: true,
+        statusMessage: () => 'Pasted selection',
+      );
+      _scheduleFloatingRebuild(floating);
+      _touch();
+    } on Object {
+      state = state.copyWith(
+        statusMessage: () => 'Clipboard does not contain pixel data',
+      );
+    }
   }
 
   /// Deletes the selected pixels (or drops the floating selection).
@@ -519,6 +857,7 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
         selection: () => null,
         statusMessage: () => 'Selection deleted',
       );
+      _dirtyBeforeFloating = null;
       _scheduleFloatingRebuild(null);
       _touch();
       return;
@@ -541,6 +880,7 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     if (selection == null) return;
     final bounds = maskBounds(selection, _w, _h);
     if (bounds == null) return;
+    _dirtyBeforeFloating = state.isDirty;
     _pushUndo();
     final lifted = liftMaskedPixels(_layer.pixels, _w, _h, selection, bounds);
     final (left, top, right, bottom) = bounds;
@@ -555,10 +895,7 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
       originalWidth: fw,
       originalHeight: fh,
     );
-    state = state.copyWith(
-      floating: () => floating,
-      selection: () => null,
-    );
+    state = state.copyWith(floating: () => floating, selection: () => null);
     _scheduleFloatingRebuild(floating);
     _touch();
   }
@@ -568,8 +905,16 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
   void _commitFloating({bool silent = false}) {
     final floating = state.floating;
     if (floating == null) return;
-    blit(_layer.pixels, _w, _h, floating.pixels, floating.width,
-        floating.height, floating.offsetX, floating.offsetY);
+    blit(
+      _layer.pixels,
+      _w,
+      _h,
+      floating.pixels,
+      floating.width,
+      floating.height,
+      floating.offsetX,
+      floating.offsetY,
+    );
     final selection = Uint8List(_w * _h);
     for (var y = 0; y < floating.height; y++) {
       final ty = floating.offsetY + y;
@@ -587,6 +932,9 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
       selection: () => selection,
       statusMessage: silent ? null : () => 'Selection placed',
     );
+    _dirtyBeforeFloating = null;
+    _shapePlanEdge = null;
+    _selectionAdditive = false;
     _scheduleFloatingRebuild(null);
     _touch();
   }
@@ -599,7 +947,8 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
   }
 
   void _transformFloating(
-      FloatingSelection Function(FloatingSelection) transform) {
+    FloatingSelection Function(FloatingSelection) transform,
+  ) {
     var floating = state.floating;
     if (floating == null) {
       if (state.selection == null) return;
@@ -618,10 +967,18 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
   void rotate90Action({required bool clockwise}) {
     if (state.floating != null || state.selection != null) {
       _transformFloating((f) {
-        final pixels =
-            rotate90(f.pixels, f.width, f.height, clockwise: clockwise);
-        final original = rotate90(f.original, f.originalWidth, f.originalHeight,
-            clockwise: clockwise);
+        final pixels = rotate90(
+          f.pixels,
+          f.width,
+          f.height,
+          clockwise: clockwise,
+        );
+        final original = rotate90(
+          f.original,
+          f.originalWidth,
+          f.originalHeight,
+          clockwise: clockwise,
+        );
         return f.copyWith(
           pixels: pixels,
           width: f.height,
@@ -638,12 +995,20 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     final layers = [
       for (final layer in doc.layers)
         layer.copyWith(
-            pixels:
-                rotate90(layer.pixels, doc.width, doc.height, clockwise: clockwise)),
+          pixels: rotate90(
+            layer.pixels,
+            doc.width,
+            doc.height,
+            clockwise: clockwise,
+          ),
+        ),
     ];
     state = state.copyWith(
       document: PixelDocument(
-          width: doc.height, height: doc.width, layers: layers),
+        width: doc.height,
+        height: doc.width,
+        layers: layers,
+      ),
     );
     _touch(status: 'Canvas rotated');
   }
@@ -679,7 +1044,12 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
   // --- Canvas size ----------------------------------------------------------
 
   /// Anchor components are -1 (keep start edge), 0 (center), 1 (keep end).
-  void resizeCanvasTo(int width, int height, {int anchorX = -1, int anchorY = -1}) {
+  void resizeCanvasTo(
+    int width,
+    int height, {
+    int anchorX = -1,
+    int anchorY = -1,
+  }) {
     final w = width.clamp(_minCanvasSide, _maxCanvasSide);
     final h = height.clamp(_minCanvasSide, _maxCanvasSide);
     if (w == _w && h == _h) return;
@@ -689,8 +1059,16 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     final layers = [
       for (final layer in doc.layers)
         layer.copyWith(
-            pixels: resizeCanvas(layer.pixels, doc.width, doc.height, w, h,
-                anchorX: anchorX, anchorY: anchorY)),
+          pixels: resizeCanvas(
+            layer.pixels,
+            doc.width,
+            doc.height,
+            w,
+            h,
+            anchorX: anchorX,
+            anchorY: anchorY,
+          ),
+        ),
     ];
     state = state.copyWith(
       document: PixelDocument(width: w, height: h, layers: layers),
@@ -711,17 +1089,97 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     final layers = [
       for (final layer in doc.layers)
         layer.copyWith(
-            pixels: cropCanvas(layer.pixels, doc.width, doc.height, bounds)),
+          pixels: cropCanvas(layer.pixels, doc.width, doc.height, bounds),
+        ),
     ];
     state = state.copyWith(
       document: PixelDocument(
-          width: right - left + 1, height: bottom - top + 1, layers: layers),
+        width: right - left + 1,
+        height: bottom - top + 1,
+        layers: layers,
+      ),
       selection: () => null,
     );
     _touch(status: 'Cropped to selection');
   }
 
   // --- Drawing gestures -------------------------------------------------------
+
+  bool get _isShapeTool =>
+      state.tool == PixelTool.rect || state.tool == PixelTool.ellipse;
+
+  (int, int) _shapeEndPoint(
+    (int, int) anchor,
+    (int, int) end, {
+    required bool constrained,
+  }) {
+    if (!constrained) return end;
+    final dx = end.$1 - anchor.$1;
+    final dy = end.$2 - anchor.$2;
+    final side = math.max(dx.abs(), dy.abs());
+    return (
+      anchor.$1 + (dx < 0 ? -side : side),
+      anchor.$2 + (dy < 0 ? -side : side),
+    );
+  }
+
+  ShapePlan _shapePlanFrom(
+    (int, int) anchor,
+    (int, int) end, {
+    required bool constrained,
+  }) {
+    final adjusted = _shapeEndPoint(anchor, end, constrained: constrained);
+    return ShapePlan(
+      left: math.min(anchor.$1, adjusted.$1).clamp(0, _w - 1),
+      top: math.min(anchor.$2, adjusted.$2).clamp(0, _h - 1),
+      right: math.max(anchor.$1, adjusted.$1).clamp(0, _w - 1),
+      bottom: math.max(anchor.$2, adjusted.$2).clamp(0, _h - 1),
+    );
+  }
+
+  Uint8List _selectionResult(Uint8List next, {required bool additive}) {
+    final previous = state.selection;
+    if (!additive || previous == null) return next;
+    final merged = Uint8List.fromList(previous);
+    for (var i = 0; i < merged.length; i++) {
+      if (next[i] != 0) merged[i] = 1;
+    }
+    return merged;
+  }
+
+  /// A marquee is an object-selection gesture: transparent padding inside the
+  /// dragged area should not become part of the selection or its outline.
+  Uint8List _opaqueSelection(Uint8List region) {
+    final composite = state.document.composite();
+    for (var i = 0; i < region.length; i++) {
+      if ((composite[i] >>> 24) == 0) region[i] = 0;
+    }
+    return region;
+  }
+
+  void startShapePlanAdjustment(int edge) {
+    if (state.shapePlan != null) _shapePlanEdge = edge.clamp(0, 3);
+  }
+
+  void confirmShapePlan() {
+    final plan = state.shapePlan;
+    if (plan == null || !_isShapeTool) return;
+    _pushUndo();
+    _paintShape((plan.left, plan.top), (plan.right, plan.bottom));
+    state = state.copyWith(shapePlan: () => null);
+    _shapePlanEdge = null;
+    _touch(status: 'Shape committed');
+  }
+
+  void cancelShapePlan() {
+    if (state.shapePlan == null) return;
+    state = state.copyWith(
+      shapePlan: () => null,
+      revision: state.revision + 1,
+      statusMessage: () => 'Shape cancelled',
+    );
+    _shapePlanEdge = null;
+  }
 
   (int, int) _clampPoint(double x, double y) =>
       (x.floor().clamp(0, _w - 1), y.floor().clamp(0, _h - 1));
@@ -742,41 +1200,138 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
         y < f.offsetY + f.height;
   }
 
+  /// Selection tools also move a selection directly. A distinct move tool is
+  /// kept only for old shortcuts and existing saved workspace state.
+  bool _startSelectionMove(int x, int y) {
+    if (_scaleCorner != null) return true;
+    final floating = state.floating;
+    if (floating != null && _insideFloating(x, y)) {
+      _moveGrabOffset = (x - floating.offsetX, y - floating.offsetY);
+      return true;
+    }
+    if (!_insideSelection(x, y)) return false;
+    _liftSelection();
+    final lifted = state.floating;
+    if (lifted != null) {
+      _moveGrabOffset = (x - lifted.offsetX, y - lifted.offsetY);
+      return true;
+    }
+    return false;
+  }
+
+  bool _updateSelectionMove(int x, int y) {
+    final corner = _scaleCorner;
+    if (corner != null) {
+      _scaleFloatingTo(corner, x, y);
+      return true;
+    }
+    final grab = _moveGrabOffset;
+    final floating = state.floating;
+    if (grab == null || floating == null) return false;
+    state = state.copyWith(
+      floating: () =>
+          floating.copyWith(offsetX: x - grab.$1, offsetY: y - grab.$2),
+      isDirty: true,
+      revision: state.revision + 1,
+    );
+    return true;
+  }
+
+  bool _finishSelectionMove() {
+    if (_moveGrabOffset == null && _scaleCorner == null) return false;
+    _moveGrabOffset = null;
+    _scaleCorner = null;
+    return true;
+  }
+
   /// Draws one brush segment (with symmetry) from [from] to [to] on the live
   /// layer buffer.
   void _paintSegment((int, int) from, (int, int) to, int color) {
-    final fromPts = symmetryPoints(from.$1, from.$2, _w, _h, state.symmetry);
-    final toPts = symmetryPoints(to.$1, to.$2, _w, _h, state.symmetry);
+    final preferences = _preferences;
+    final fromPts = symmetryPoints(
+      from.$1,
+      from.$2,
+      _w,
+      _h,
+      preferences.symmetry,
+    );
+    final toPts = symmetryPoints(to.$1, to.$2, _w, _h, preferences.symmetry);
     for (var i = 0; i < fromPts.length; i++) {
-      drawLine(_layer.pixels, _w, _h, fromPts[i].$1, fromPts[i].$2,
-          toPts[i].$1, toPts[i].$2, color,
-          brushSize: state.brushSize, mask: state.selection);
+      drawLine(
+        _layer.pixels,
+        _w,
+        _h,
+        fromPts[i].$1,
+        fromPts[i].$2,
+        toPts[i].$1,
+        toPts[i].$2,
+        color,
+        brushSize: preferences.brushSize,
+        mask: state.selection,
+      );
     }
   }
 
   void _paintShape((int, int) from, (int, int) to) {
-    final fromPts = symmetryPoints(from.$1, from.$2, _w, _h, state.symmetry);
-    final toPts = symmetryPoints(to.$1, to.$2, _w, _h, state.symmetry);
+    final preferences = _preferences;
+    final fromPts = symmetryPoints(
+      from.$1,
+      from.$2,
+      _w,
+      _h,
+      preferences.symmetry,
+    );
+    final toPts = symmetryPoints(to.$1, to.$2, _w, _h, preferences.symmetry);
     for (var i = 0; i < fromPts.length; i++) {
       final (x0, y0) = fromPts[i];
       final (x1, y1) = toPts[i];
       switch (state.tool) {
         case PixelTool.line:
-          drawLine(_layer.pixels, _w, _h, x0, y0, x1, y1, state.color,
-              brushSize: state.brushSize, mask: state.selection);
+          drawLine(
+            _layer.pixels,
+            _w,
+            _h,
+            x0,
+            y0,
+            x1,
+            y1,
+            state.color,
+            brushSize: preferences.brushSize,
+            mask: state.selection,
+          );
         case PixelTool.rect:
-          drawRectShape(_layer.pixels, _w, _h, x0, y0, x1, y1, state.color,
-              brushSize: state.brushSize, mask: state.selection);
+          drawRectShape(
+            _layer.pixels,
+            _w,
+            _h,
+            x0,
+            y0,
+            x1,
+            y1,
+            state.color,
+            brushSize: preferences.brushSize,
+            mask: state.selection,
+          );
         case PixelTool.ellipse:
-          drawEllipseShape(_layer.pixels, _w, _h, x0, y0, x1, y1, state.color,
-              brushSize: state.brushSize, mask: state.selection);
+          drawEllipseShape(
+            _layer.pixels,
+            _w,
+            _h,
+            x0,
+            y0,
+            x1,
+            y1,
+            state.color,
+            brushSize: preferences.brushSize,
+            mask: state.selection,
+          );
         default:
           break;
       }
     }
   }
 
-  void strokeStart(double px, double py) {
+  void strokeStart(double px, double py, {bool additiveSelection = false}) {
     final (x, y) = _clampPoint(px, py);
     switch (state.tool) {
       case PixelTool.pencil:
@@ -787,45 +1342,60 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
         _paintSegment((x, y), (x, y), color);
         _touch();
       case PixelTool.line:
+        _strokeBase = Uint32List.fromList(_layer.pixels);
+        _shapeAnchor = (x, y);
+        _paintShape((x, y), (x, y));
+        _touch();
       case PixelTool.rect:
       case PixelTool.ellipse:
+        if (_preferences.shapeMode == ShapeInteractionMode.planned) {
+          if (_shapePlanEdge != null) return;
+          _shapeAnchor = (x, y);
+          state = state.copyWith(
+            shapePlan: () => ShapePlan(left: x, top: y, right: x, bottom: y),
+            revision: state.revision + 1,
+          );
+          return;
+        }
         _strokeBase = Uint32List.fromList(_layer.pixels);
         _shapeAnchor = (x, y);
         _paintShape((x, y), (x, y));
         _touch();
       case PixelTool.selectRect:
+        if (_startSelectionMove(x, y)) return;
         _commitFloating(silent: true);
+        _selectionAdditive = additiveSelection;
         _shapeAnchor = (x, y);
         state = state.copyWith(
           selectDraft: () => SelectDraft(x, y, x, y),
           revision: state.revision + 1,
         );
       case PixelTool.lasso:
+        if (_startSelectionMove(x, y)) return;
         _commitFloating(silent: true);
+        _selectionAdditive = additiveSelection;
         state = state.copyWith(
           lassoDraft: () => [(px, py)],
           revision: state.revision + 1,
         );
+      case PixelTool.wand:
+        if (_startSelectionMove(x, y)) return;
+        _commitFloating(silent: true);
+        _selectionAdditive = additiveSelection;
+        _shapeAnchor = (x, y);
+        state = state.copyWith(
+          selectDraft: () => SelectDraft(x, y, x, y),
+          revision: state.revision + 1,
+        );
       case PixelTool.move:
-        if (_scaleCorner != null) return; // handle grab set by the widget
-        if (_insideFloating(x, y)) {
-          final f = state.floating!;
-          _moveGrabOffset = (x - f.offsetX, y - f.offsetY);
-        } else if (_insideSelection(x, y)) {
-          _liftSelection();
-          final f = state.floating;
-          if (f != null) _moveGrabOffset = (x - f.offsetX, y - f.offsetY);
-        } else {
-          _commitFloating();
-        }
+        if (!_startSelectionMove(x, y)) _commitFloating();
       case PixelTool.fill:
       case PixelTool.eyedropper:
-      case PixelTool.wand:
         break; // tap-only tools
     }
   }
 
-  void strokeUpdate(double px, double py) {
+  void strokeUpdate(double px, double py, {bool constrainShape = false}) {
     final (x, y) = _clampPoint(px, py);
     switch (state.tool) {
       case PixelTool.pencil:
@@ -838,15 +1408,51 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
         _lastStrokePoint = (x, y);
         _touch();
       case PixelTool.line:
-      case PixelTool.rect:
-      case PixelTool.ellipse:
         final base = _strokeBase;
         final anchor = _shapeAnchor;
         if (base == null || anchor == null) return;
         _layer.pixels.setAll(0, base);
         _paintShape(anchor, (x, y));
         _touch();
+      case PixelTool.rect:
+      case PixelTool.ellipse:
+        if (_preferences.shapeMode == ShapeInteractionMode.planned) {
+          final plan = state.shapePlan;
+          if (plan == null) return;
+          final edge = _shapePlanEdge;
+          if (edge != null) {
+            final next = switch (edge) {
+              0 => plan.copyWith(left: x.clamp(0, plan.right)),
+              1 => plan.copyWith(top: y.clamp(0, plan.bottom)),
+              2 => plan.copyWith(right: x.clamp(plan.left, _w - 1)),
+              _ => plan.copyWith(bottom: y.clamp(plan.top, _h - 1)),
+            };
+            state = state.copyWith(
+              shapePlan: () => next,
+              revision: state.revision + 1,
+            );
+            return;
+          }
+          final anchor = _shapeAnchor;
+          if (anchor == null) return;
+          state = state.copyWith(
+            shapePlan: () =>
+                _shapePlanFrom(anchor, (x, y), constrained: constrainShape),
+            revision: state.revision + 1,
+          );
+          return;
+        }
+        final base = _strokeBase;
+        final anchor = _shapeAnchor;
+        if (base == null || anchor == null) return;
+        _layer.pixels.setAll(0, base);
+        _paintShape(
+          anchor,
+          _shapeEndPoint(anchor, (x, y), constrained: constrainShape),
+        );
+        _touch();
       case PixelTool.selectRect:
+        if (_updateSelectionMove(x, y)) return;
         final anchor = _shapeAnchor;
         if (anchor == null) return;
         state = state.copyWith(
@@ -854,30 +1460,25 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
           revision: state.revision + 1,
         );
       case PixelTool.lasso:
+        if (_updateSelectionMove(x, y)) return;
         final draft = state.lassoDraft;
         if (draft == null) return;
         state = state.copyWith(
           lassoDraft: () => [...draft, (px, py)],
           revision: state.revision + 1,
         );
-      case PixelTool.move:
-        final corner = _scaleCorner;
-        if (corner != null) {
-          _scaleFloatingTo(corner, x, y);
-          return;
-        }
-        final grab = _moveGrabOffset;
-        final f = state.floating;
-        if (grab == null || f == null) return;
-        final next = f.copyWith(offsetX: x - grab.$1, offsetY: y - grab.$2);
+      case PixelTool.wand:
+        if (_updateSelectionMove(x, y)) return;
+        final anchor = _shapeAnchor;
+        if (anchor == null) return;
         state = state.copyWith(
-          floating: () => next,
-          isDirty: true,
+          selectDraft: () => SelectDraft(anchor.$1, anchor.$2, x, y),
           revision: state.revision + 1,
         );
+      case PixelTool.move:
+        _updateSelectionMove(x, y);
       case PixelTool.fill:
       case PixelTool.eyedropper:
-      case PixelTool.wand:
         break;
     }
   }
@@ -887,25 +1488,30 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
       case PixelTool.pencil:
       case PixelTool.eraser:
       case PixelTool.line:
+        _finishDrawnStroke();
       case PixelTool.rect:
       case PixelTool.ellipse:
-        final base = _strokeBase;
-        if (base == null) return;
-        _strokeBase = null;
-        _shapeAnchor = null;
-        _lastStrokePoint = null;
-        // History records the pre-stroke buffer; the live buffer already
-        // holds the result.
-        final result = Uint32List.fromList(_layer.pixels);
-        _layer.pixels.setAll(0, base);
-        _pushUndo();
-        _layer.pixels.setAll(0, result);
-        _touch();
+        if (_preferences.shapeMode == ShapeInteractionMode.planned) {
+          _shapeAnchor = null;
+          _shapePlanEdge = null;
+          state = state.copyWith(
+            statusMessage: () => 'Adjust bounds, then confirm',
+          );
+          return;
+        }
+        _finishDrawnStroke();
       case PixelTool.selectRect:
+        if (_finishSelectionMove()) return;
         final draft = state.selectDraft;
         _shapeAnchor = null;
         if (draft == null) return;
-        final mask = rectMask(_w, _h, draft.x0, draft.y0, draft.x1, draft.y1);
+        final mask = _selectionResult(
+          _opaqueSelection(
+            rectMask(_w, _h, draft.x0, draft.y0, draft.x1, draft.y1),
+          ),
+          additive: _selectionAdditive,
+        );
+        _selectionAdditive = false;
         state = state.copyWith(
           selection: () => mask,
           selectDraft: () => null,
@@ -913,9 +1519,16 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
           statusMessage: () => 'Selected',
         );
       case PixelTool.lasso:
+        if (_finishSelectionMove()) return;
         final draft = state.lassoDraft;
         if (draft == null) return;
-        final mask = draft.length >= 3 ? polygonMask(_w, _h, draft) : null;
+        final rawMask = draft.length >= 3
+            ? _opaqueSelection(polygonMask(_w, _h, draft))
+            : null;
+        final mask = rawMask == null
+            ? null
+            : _selectionResult(rawMask, additive: _selectionAdditive);
+        _selectionAdditive = false;
         final hasAny = mask != null && mask.any((v) => v != 0);
         state = state.copyWith(
           selection: () => hasAny ? mask : null,
@@ -923,22 +1536,56 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
           revision: state.revision + 1,
           statusMessage: () => hasAny ? 'Selected' : 'Empty selection',
         );
+      case PixelTool.wand:
+        if (_finishSelectionMove()) return;
+        final draft = state.selectDraft;
+        _shapeAnchor = null;
+        if (draft == null) return;
+        final mask = _selectionResult(
+          _opaqueSelection(
+            rectMask(_w, _h, draft.x0, draft.y0, draft.x1, draft.y1),
+          ),
+          additive: _selectionAdditive,
+        );
+        _selectionAdditive = false;
+        final hasAny = mask.any((value) => value != 0);
+        state = state.copyWith(
+          selection: () => hasAny ? mask : null,
+          selectDraft: () => null,
+          revision: state.revision + 1,
+          statusMessage: () => hasAny ? 'Selected' : 'Empty selection',
+        );
       case PixelTool.move:
-        _moveGrabOffset = null;
-        _scaleCorner = null;
+        _finishSelectionMove();
       case PixelTool.fill:
       case PixelTool.eyedropper:
-      case PixelTool.wand:
         break;
     }
+  }
+
+  void _finishDrawnStroke() {
+    final base = _strokeBase;
+    if (base == null) return;
+    _strokeBase = null;
+    _shapeAnchor = null;
+    _lastStrokePoint = null;
+    final result = Uint32List.fromList(_layer.pixels);
+    _layer.pixels.setAll(0, base);
+    _pushUndo();
+    _layer.pixels.setAll(0, result);
+    _touch();
   }
 
   void _scaleFloatingTo(int corner, int x, int y) {
     final f = state.floating;
     if (f == null) return;
     // The corner opposite the grabbed one stays fixed.
-    final fixedX = corner == 0 || corner == 2 ? f.offsetX + f.width - 1 : f.offsetX;
-    final fixedY = corner == 0 || corner == 1 ? f.offsetY + f.height - 1 : f.offsetY;
+    final fixedX = corner == 0 || corner == 2
+        ? f.offsetX + f.width - 1
+        : f.offsetX;
+    final fixedY = corner == 0 || corner == 1
+        ? f.offsetY + f.height - 1
+        : f.offsetY;
     final left = x < fixedX ? x : fixedX;
     final right = x < fixedX ? fixedX : x;
     final top = y < fixedY ? y : fixedY;
@@ -960,7 +1607,7 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     _scheduleFloatingRebuild(next);
   }
 
-  void tapAt(double px, double py) {
+  void tapAt(double px, double py, {bool additiveSelection = false}) {
     final (x, y) = _clampPoint(px, py);
     switch (state.tool) {
       case PixelTool.pencil:
@@ -970,20 +1617,44 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
         _paintSegment((x, y), (x, y), color);
         strokeEnd();
       case PixelTool.fill:
+        final preferences = _preferences;
         _pushUndo();
-        for (final (sx, sy) in symmetryPoints(x, y, _w, _h, state.symmetry)) {
-          floodFill(_layer.pixels, _w, _h, sx, sy, state.color,
-              tolerance: state.fillTolerance,
-              contiguous: state.fillContiguous,
-              mask: state.selection);
+        for (final (sx, sy) in symmetryPoints(
+          x,
+          y,
+          _w,
+          _h,
+          preferences.symmetry,
+        )) {
+          floodFill(
+            _layer.pixels,
+            _w,
+            _h,
+            sx,
+            sy,
+            state.color,
+            tolerance: preferences.fillTolerance,
+            contiguous: preferences.fillContiguous,
+            mask: state.selection,
+            shadeStrength: preferences.fillShadeEnabled
+                ? preferences.fillShadeStrength
+                : 0,
+          );
         }
-        _touch(status: state.fillContiguous ? 'Filled' : 'Color replaced');
+        _touch(
+          status: preferences.fillShadeEnabled
+              ? 'Filled with shade variation'
+              : preferences.fillContiguous
+              ? 'Filled'
+              : 'Color replaced',
+        );
       case PixelTool.eyedropper:
         final composite = state.document.composite();
         final picked = composite[y * _w + x];
         if ((picked >>> 24) == 0) {
           state = state.copyWith(
-              statusMessage: () => 'Transparent pixel: color kept');
+            statusMessage: () => 'Transparent pixel: color kept',
+          );
         } else {
           state = state.copyWith(
             color: picked,
@@ -991,9 +1662,22 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
           );
         }
       case PixelTool.wand:
+        final preferences = _preferences;
         _commitFloating(silent: true);
-        final mask = magicWandMask(_layer.pixels, _w, _h, x, y,
-            tolerance: state.fillTolerance, contiguous: state.fillContiguous);
+        final mask = _selectionResult(
+          _opaqueSelection(
+            magicWandMask(
+              _layer.pixels,
+              _w,
+              _h,
+              x,
+              y,
+              tolerance: preferences.fillTolerance,
+              contiguous: preferences.fillContiguous,
+            ),
+          ),
+          additive: additiveSelection,
+        );
         final hasAny = mask.any((v) => v != 0);
         state = state.copyWith(
           selection: () => hasAny ? mask : null,
@@ -1003,10 +1687,12 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
       case PixelTool.selectRect:
       case PixelTool.lasso:
         _commitFloating(silent: true);
-        state = state.copyWith(
-          selection: () => null,
-          revision: state.revision + 1,
-        );
+        if (!additiveSelection) {
+          state = state.copyWith(
+            selection: () => null,
+            revision: state.revision + 1,
+          );
+        }
       case PixelTool.move:
         _scaleCorner = null;
         if (state.floating != null && !_insideFloating(x, y)) {
@@ -1027,14 +1713,25 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     _undoStack.clear();
     _redoStack.clear();
     _strokeBase = null;
+    _shapeAnchor = null;
+    _lastStrokePoint = null;
+    _moveGrabOffset = null;
+    _scaleCorner = null;
+    _dirtyBeforeFloating = null;
+    _shapePlanEdge = null;
+    _selectionAdditive = false;
     state = state.copyWith(
       document: PixelDocument.blank(w, h),
+      imageColors: const [],
       selection: () => null,
       floating: () => null,
       selectDraft: () => null,
       lassoDraft: () => null,
+      shapePlan: () => null,
       isDirty: false,
       filePath: () => null,
+      displayName: 'Untitled Pixel',
+      assetTarget: () => null,
       canUndo: false,
       canRedo: false,
       statusMessage: () => 'New $w x $h canvas',
@@ -1049,19 +1746,166 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     final doc = state.document.clone();
     final floating = state.floating;
     if (floating != null) {
-      blit(doc.layers.first.pixels, doc.width, doc.height, floating.pixels,
-          floating.width, floating.height, floating.offsetX, floating.offsetY);
+      blit(
+        doc.layers.first.pixels,
+        doc.width,
+        doc.height,
+        floating.pixels,
+        floating.width,
+        floating.height,
+        floating.offsetX,
+        floating.offsetY,
+      );
+    }
+    return RgpixFile(document: doc, palette: state.palette);
+  }
+
+  void _loadProject(
+    RgpixFile project, {
+    required String displayName,
+    String? filePath,
+    AssetPixelTarget? assetTarget,
+    String? status,
+    bool isDirty = false,
+  }) {
+    _undoStack.clear();
+    _redoStack.clear();
+    _strokeBase = null;
+    _shapeAnchor = null;
+    _lastStrokePoint = null;
+    _moveGrabOffset = null;
+    _scaleCorner = null;
+    _shapePlanEdge = null;
+    _selectionAdditive = false;
+    _dirtyBeforeFloating = null;
+    state = state.copyWith(
+      document: project.document,
+      palette: project.palette,
+      imageColors: frequentOpaqueColors(project.document.composite()),
+      selection: () => null,
+      floating: () => null,
+      selectDraft: () => null,
+      lassoDraft: () => null,
+      shapePlan: () => null,
+      isDirty: isDirty,
+      filePath: () => filePath,
+      displayName: displayName,
+      assetTarget: () => assetTarget,
+      canUndo: false,
+      canRedo: false,
+      statusMessage: () => status ?? 'Opened $displayName',
+    );
+    _scheduleFloatingRebuild(null);
+    _scheduleRebuild(state.document);
+  }
+
+  RgpixFile? _projectFromImageBytes(Uint8List imageBytes) {
+    final decoded = img.decodeImage(imageBytes);
+    if (decoded == null ||
+        decoded.width <= 0 ||
+        decoded.height <= 0 ||
+        decoded.width > _maxCanvasSide ||
+        decoded.height > _maxCanvasSide) {
+      return null;
+    }
+    final pixels = Uint32List(decoded.width * decoded.height);
+    for (var y = 0; y < decoded.height; y++) {
+      for (var x = 0; x < decoded.width; x++) {
+        final pixel = decoded.getPixel(x, y);
+        pixels[y * decoded.width + x] =
+            (pixel.a.toInt() << 24) |
+            (pixel.r.toInt() << 16) |
+            (pixel.g.toInt() << 8) |
+            pixel.b.toInt();
+      }
     }
     return RgpixFile(
-      document: doc,
-      palette: state.palette,
-      showPixelGrid: state.showPixelGrid,
-      showCellGrid: state.showCellGrid,
-      symmetry: state.symmetry.jsonValue,
+      document: PixelDocument(
+        width: decoded.width,
+        height: decoded.height,
+        layers: [PixelLayer(name: 'Layer 1', pixels: pixels)],
+      ),
+      palette: defaultPixelPalette,
+    );
+  }
+
+  /// Opens an Asset Definer source in this tab. Embedded project data wins;
+  /// older bundles and ordinary imported images fall back to a one-layer
+  /// document decoded from their PNG bytes.
+  String? loadAssetSource({
+    required Uint8List imageBytes,
+    required String name,
+    required AssetPixelTarget target,
+    Uint8List? pixelProjectBytes,
+  }) {
+    RgpixFile? project;
+    String? warning;
+    if (pixelProjectBytes != null) {
+      try {
+        project = RgpixFile.decode(utf8.decode(pixelProjectBytes));
+      } on Object {
+        warning = 'Embedded pixel project was invalid; opened the PNG instead';
+      }
+    }
+
+    if (project == null) {
+      project = _projectFromImageBytes(imageBytes);
+      if (project == null) {
+        return 'Pixel Editor could not decode $name at its original size';
+      }
+    }
+
+    _loadProject(
+      project,
+      displayName: name,
+      assetTarget: target,
+      status: warning,
+    );
+    return null;
+  }
+
+  bool importImageBytes(Uint8List imageBytes, String name) {
+    final project = _projectFromImageBytes(imageBytes);
+    if (project == null) {
+      state = state.copyWith(
+        statusMessage: () =>
+            'Import failed: image must be decodable and at most 1024 x 1024 px',
+      );
+      return false;
+    }
+    _loadProject(
+      project,
+      displayName: name,
+      isDirty: true,
+      status: 'Imported $name at 1:1 pixel size',
+    );
+    return true;
+  }
+
+  Future<bool> importImageFile() async {
+    final result = await FilePicker.pickFiles(
+      dialogTitle: 'Import image at 1:1 pixel size',
+      type: FileType.image,
+      withData: true,
+    );
+    final file = result?.files.single;
+    final bytes = file?.bytes;
+    if (file == null || bytes == null) return false;
+    return importImageBytes(bytes, file.name);
+  }
+
+  void refreshImageColors() {
+    state = state.copyWith(
+      imageColors: frequentOpaqueColors(state.document.composite()),
+      statusMessage: () => 'Refreshed image colors',
     );
   }
 
   Future<void> save() async {
+    if (state.assetTarget != null) {
+      await _embedInAssetDefiner(activateAssetDefiner: false);
+      return;
+    }
     final path = state.filePath;
     if (path == null) {
       await saveAs();
@@ -1095,11 +1939,13 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     state = state.copyWith(
       isDirty: false,
       filePath: () => path,
+      displayName: path.split('/').last,
+      assetTarget: () => null,
       statusMessage: () => 'Saved to $path',
     );
   }
 
-  Future<void> openFile() async {
+  Future<bool> openFile() async {
     final result = await FilePicker.pickFiles(
       dialogTitle: 'Open pixel project',
       type: FileType.custom,
@@ -1107,33 +1953,16 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
       withData: true,
     );
     final file = result?.files.single;
-    if (file?.bytes == null) return;
+    if (file?.bytes == null) return false;
     final RgpixFile decoded;
     try {
       decoded = RgpixFile.decode(utf8.decode(file!.bytes!));
     } on FormatException catch (e) {
       state = state.copyWith(statusMessage: () => 'Open failed: ${e.message}');
-      return;
+      return false;
     }
-    _undoStack.clear();
-    _redoStack.clear();
-    _strokeBase = null;
-    state = state.copyWith(
-      document: decoded.document,
-      palette: decoded.palette.isEmpty ? null : decoded.palette,
-      showPixelGrid: decoded.showPixelGrid,
-      showCellGrid: decoded.showCellGrid,
-      symmetry: SymmetryMode.fromJson(decoded.symmetry),
-      selection: () => null,
-      floating: () => null,
-      isDirty: false,
-      filePath: () => file.path,
-      canUndo: false,
-      canRedo: false,
-      statusMessage: () => 'Opened ${file.name}',
-    );
-    _scheduleFloatingRebuild(null);
-    _scheduleRebuild(state.document);
+    _loadProject(decoded, displayName: file.name, filePath: file.path);
+    return true;
   }
 
   Uint8List _encodePng() {
@@ -1150,8 +1979,8 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
   }
 
   String get _pngName {
-    final base = state.filePath?.split('/').last.replaceAll('.rgpix', '');
-    return '${base ?? 'pixel-art'}.png';
+    final base = state.displayName.replaceFirst(RegExp(r'\.(rgpix|png)$'), '');
+    return '$base.png';
   }
 
   Future<void> exportPng() async {
@@ -1167,25 +1996,63 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     }
   }
 
-  /// Hands the flattened image straight to Phase 1 as the given category's
-  /// source image (decoration: added as a new image) and switches to the
-  /// Asset Definer tab.
-  Future<void> sendToPhase1(BlockCategory category) async {
+  Future<bool> _embedInAssetDefiner({
+    BlockCategory? category,
+    required bool activateAssetDefiner,
+  }) async {
+    final previousTarget = state.assetTarget;
+    final resolvedCategory = category ?? previousTarget?.category;
+    if (resolvedCategory == null) return false;
+    final projectBytes = Uint8List.fromList(
+      utf8.encode(_currentFile().encode()),
+    );
     final error = await ref
         .read(assetDefinerProvider.notifier)
-        .importImageBytes(_encodePng(), _pngName, category);
+        .importImageBytes(
+          _encodePng(),
+          _pngName,
+          resolvedCategory,
+          pixelProjectBytes: projectBytes,
+          decorationIndex: previousTarget?.category == resolvedCategory
+              ? previousTarget?.decorationIndex
+              : null,
+        );
     if (error != null) {
       state = state.copyWith(statusMessage: () => error);
-      return;
+      return false;
     }
-    ref.read(workspaceProvider.notifier).activatePhase1();
-    state = state.copyWith(
-      statusMessage: () =>
-          'Sent to Phase 1 as ${category.jsonValue} image',
+    final assetState = ref.read(assetDefinerProvider);
+    final target = AssetPixelTarget(
+      category: resolvedCategory,
+      decorationIndex: resolvedCategory == BlockCategory.decoration
+          ? assetState.activeDecorationIndex
+          : null,
     );
+    state = state.copyWith(
+      isDirty: false,
+      filePath: () => null,
+      displayName: _pngName,
+      assetTarget: () => target,
+      statusMessage: () => 'Embedded in Asset Definer',
+    );
+    if (activateAssetDefiner) {
+      ref.read(workspaceProvider.notifier).activatePhase1();
+    }
+    return true;
+  }
+
+  /// Embeds the editable project and flattened PNG in Asset Definer, then
+  /// switches back to it. A standalone tab needs a category; a tab opened
+  /// from an asset source updates that exact source.
+  Future<void> sendToAssetDefiner([BlockCategory? category]) async {
+    await _embedInAssetDefiner(category: category, activateAssetDefiner: true);
   }
 }
 
+/// One independent pixel-editor instance per open Pixel tab. The family is
+/// deliberately non-autoDispose so switching tabs keeps document history and
+/// decoded images alive until the workspace closes that tab.
 final pixelEditorProvider =
-    NotifierProvider<PixelEditorNotifier, PixelEditorState>(
-        PixelEditorNotifier.new);
+    NotifierProvider.family<PixelEditorNotifier, PixelEditorState, int>(
+      (_) => PixelEditorNotifier(),
+    );

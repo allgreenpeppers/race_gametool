@@ -63,11 +63,13 @@ class CategoryImage {
     required this.bytes,
     required this.image,
     required this.name,
+    this.pixelProjectBytes,
   });
 
   final Uint8List bytes;
   final ui.Image image;
   final String name;
+  final Uint8List? pixelProjectBytes;
 }
 
 class AssetDefinerState {
@@ -461,16 +463,57 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
   /// image and keep the masks, reporting any that fall out of bounds (same
   /// contract as [loadImage]). Returns an error message, or null on success.
   Future<String?> importImageBytes(
-      Uint8List bytes, String name, BlockCategory category) async {
+    Uint8List bytes,
+    String name,
+    BlockCategory category, {
+    Uint8List? pixelProjectBytes,
+    int? decorationIndex,
+  }) async {
     final ui.Image image;
     try {
       image = await _decode(bytes);
     } catch (e) {
-      return 'Phase 1 could not decode the image: $e';
+      return 'Asset Definer could not decode the image: $e';
     }
-    final newImage = CategoryImage(bytes: bytes, image: image, name: name);
+    final newImage = CategoryImage(
+      bytes: bytes,
+      image: image,
+      name: name,
+      pixelProjectBytes: pixelProjectBytes,
+    );
 
     if (category == BlockCategory.decoration) {
+      if (decorationIndex != null) {
+        if (decorationIndex < 0 ||
+            decorationIndex >= state.decorationSources.length) {
+          return 'Decoration source no longer exists';
+        }
+        final sources = [...state.decorationSources]
+          ..[decorationIndex] = newImage;
+        final cols = (image.width / GridConstants.cellSize).ceil();
+        final rows = (image.height / GridConstants.cellSize).ceil();
+        final masks = state.decorationMasks[decorationIndex];
+        final outOfBounds = masks
+            .where(
+              (m) =>
+                  m.gridX + m.widthCells > cols ||
+                  m.gridY + m.heightCells > rows,
+            )
+            .map((m) => m.id)
+            .toList();
+        state = state.copyWith(
+          decorationSources: sources,
+          activeCategory: BlockCategory.decoration,
+          activeDecorationIndex: decorationIndex,
+          selectedIndex: () => null,
+          isDirty: true,
+          statusMessage: () => outOfBounds.isEmpty
+              ? 'Updated decoration image $name'
+              : 'Updated $name; ${outOfBounds.length} block(s) now out of '
+                    'bounds: ${outOfBounds.join(', ')}',
+        );
+        return null;
+      }
       state = state.copyWith(
         decorationSources: [...state.decorationSources, newImage],
         decorationMasks: [...state.decorationMasks, <MaskDraft>[]],
@@ -501,7 +544,7 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       statusMessage: () => outOfBounds.isEmpty
           ? 'Imported $name (${image.width} x ${image.height} px)'
           : 'Imported $name; ${outOfBounds.length} block(s) now out of '
-              'bounds: ${outOfBounds.join(', ')}',
+                'bounds: ${outOfBounds.join(', ')}',
     );
     return null;
   }
@@ -1024,6 +1067,7 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
             name: catImage.name,
             imageBytes: catImage.bytes,
             masks: catMasks,
+            pixelProjectBytes: catImage.pixelProjectBytes,
           ),
         );
       }
@@ -1040,6 +1084,7 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
           name: img.name,
           imageBytes: img.bytes,
           masks: masks,
+          pixelProjectBytes: img.pixelProjectBytes,
         ),
       );
     }
@@ -1127,8 +1172,8 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       isDirty: false,
       currentFilePath: () => path,
       statusMessage: () => handOffError == null
-          ? 'Saved ${state.allMasks.length} blocks to $path (available in Phase 2)'
-          : 'Saved to $path, but Phase 2 could not load it: $handOffError',
+          ? 'Saved ${state.allMasks.length} blocks to $path (available in Level Editor)'
+          : 'Saved to $path, but Level Editor could not load it: $handOffError',
     );
   }
 
@@ -1191,8 +1236,8 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       isDirty: false,
       currentFilePath: () => path,
       statusMessage: () => handOffError == null
-          ? 'Saved ${state.allMasks.length} blocks to $path (available in Phase 2)'
-          : 'Saved to $path, but Phase 2 could not load it: $handOffError',
+          ? 'Saved ${state.allMasks.length} blocks to $path (available in Level Editor)'
+          : 'Saved to $path, but Level Editor could not load it: $handOffError',
     );
   }
 
@@ -1269,6 +1314,7 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
           bytes: entry.value,
           image: await _decode(entry.value),
           name: data.imageName,
+          pixelProjectBytes: data.categoryPixelProjects[entry.key],
         );
       }
     } else {
@@ -1293,6 +1339,7 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
             bytes: src.imageBytes,
             image: await _decode(src.imageBytes),
             name: src.name,
+            pixelProjectBytes: src.pixelProjectBytes,
           ),
         );
         decorationMasks.add(src.masks);
@@ -1481,7 +1528,8 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
     // Selection only locks once drawing has actually begun (a committed point
     // or an in-progress arc draft). Before that - in view mode, or in draw mode
     // with nothing placed yet - a tap on another block just switches to it.
-    final drawingStarted = state.physicsDrawing &&
+    final drawingStarted =
+        state.physicsDrawing &&
         currentMask != null &&
         (currentMask.physicsTrackArea.isNotEmpty ||
             state.curveDraftPoints.isNotEmpty);
@@ -1492,7 +1540,8 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
       // neighboring block, which used to steal boundary clicks by switching
       // selection -- making a boundary start point (and closing on a boundary
       // first vertex) impossible next to an adjacent block.
-      final onCurrentBlock = currentMask != null &&
+      final onCurrentBlock =
+          currentMask != null &&
           maskContainsLocalPoint(
             Vec2(
               localPos.dx - currentMask.gridX * GridConstants.cellSize,
@@ -1620,7 +1669,8 @@ class AssetDefinerNotifier extends Notifier<AssetDefinerState> {
     );
     // _generateArc's first point is the start; drop it when the start is
     // already a committed vertex so it is not duplicated.
-    final toAdd = mask.physicsTrackArea.isNotEmpty &&
+    final toAdd =
+        mask.physicsTrackArea.isNotEmpty &&
             arc.isNotEmpty &&
             arc.first == mask.physicsTrackArea.last
         ? arc.sublist(1)

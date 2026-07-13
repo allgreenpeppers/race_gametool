@@ -28,13 +28,12 @@ class PixelLayer {
     bool? visible,
     double? opacity,
     Uint32List? pixels,
-  }) =>
-      PixelLayer(
-        name: name ?? this.name,
-        visible: visible ?? this.visible,
-        opacity: opacity ?? this.opacity,
-        pixels: pixels ?? this.pixels,
-      );
+  }) => PixelLayer(
+    name: name ?? this.name,
+    visible: visible ?? this.visible,
+    opacity: opacity ?? this.opacity,
+    pixels: pixels ?? this.pixels,
+  );
 
   /// Deep copy, for undo snapshots.
   PixelLayer clone() => copyWith(pixels: Uint32List.fromList(pixels));
@@ -52,10 +51,10 @@ class PixelDocument {
   }) : assert(layers.isNotEmpty);
 
   factory PixelDocument.blank(int width, int height) => PixelDocument(
-        width: width,
-        height: height,
-        layers: [PixelLayer.blank('Layer 1', width, height)],
-      );
+    width: width,
+    height: height,
+    layers: [PixelLayer.blank('Layer 1', width, height)],
+  );
 
   final int width;
   final int height;
@@ -71,10 +70,10 @@ class PixelDocument {
       );
 
   PixelDocument clone() => PixelDocument(
-        width: width,
-        height: height,
-        layers: [for (final l in layers) l.clone()],
-      );
+    width: width,
+    height: height,
+    layers: [for (final l in layers) l.clone()],
+  );
 
   /// Flattens visible layers bottom-to-top with source-over blending into a
   /// single ARGB buffer.
@@ -98,7 +97,10 @@ class PixelDocument {
         }
         final outA = sa + da * (255 - sa) ~/ 255;
         int blend(int sc, int dc) =>
-            ((sc * sa + dc * da * (255 - sa) ~/ 255) / outA).round().clamp(0, 255);
+            ((sc * sa + dc * da * (255 - sa) ~/ 255) / outA).round().clamp(
+              0,
+              255,
+            );
         final r = blend((s >>> 16) & 0xff, (d >>> 16) & 0xff);
         final g = blend((s >>> 8) & 0xff, (d >>> 8) & 0xff);
         final b = blend(s & 0xff, d & 0xff);
@@ -109,26 +111,15 @@ class PixelDocument {
   }
 }
 
-/// The saved form of a pixel editor session: the document plus the editing
-/// context worth restoring (palette, grid toggles, symmetry). Serialized as
-/// JSON in a `.rgpix` file.
+/// The saved form of a pixel editor session: the document plus its palette.
+/// Presentation and tool preferences are app-wide and intentionally omitted.
 class RgpixFile {
-  const RgpixFile({
-    required this.document,
-    this.palette = const [],
-    this.showPixelGrid = true,
-    this.showCellGrid = true,
-    this.symmetry = 'none',
-  });
+  const RgpixFile({required this.document, this.palette = const []});
 
   final PixelDocument document;
 
   /// ARGB ints.
   final List<int> palette;
-
-  final bool showPixelGrid;
-  final bool showCellGrid;
-  final String symmetry;
 
   static const formatName = 'rgpix';
   static const formatVersion = 1;
@@ -149,16 +140,21 @@ class RgpixFile {
           },
       ],
       'palette': [for (final c in palette) _argbToHex(c)],
-      'settings': {
-        'showPixelGrid': showPixelGrid,
-        'showCellGrid': showCellGrid,
-        'symmetry': symmetry,
-      },
     });
   }
 
   /// Throws [FormatException] on anything that is not a valid rgpix payload.
   static RgpixFile decode(String source) {
+    try {
+      return _decode(source);
+    } on FormatException {
+      rethrow;
+    } on TypeError {
+      throw const FormatException('invalid rgpix field type');
+    }
+  }
+
+  static RgpixFile _decode(String source) {
     final root = jsonDecode(source);
     if (root is! Map<String, dynamic> || root['format'] != formatName) {
       throw const FormatException('not an rgpix file');
@@ -182,37 +178,36 @@ class RgpixFile {
       if (entry is! Map<String, dynamic>) {
         throw const FormatException('invalid rgpix layer');
       }
-      final pixels =
-          rgbaBytesToPixels(base64Decode(entry['pixels'] as String));
+      final pixels = rgbaBytesToPixels(base64Decode(entry['pixels'] as String));
       if (pixels.length != width * height) {
         throw const FormatException('rgpix layer size mismatch');
       }
-      layers.add(PixelLayer(
-        name: entry['name'] as String? ?? 'Layer',
-        visible: entry['visible'] as bool? ?? true,
-        opacity: (entry['opacity'] as num?)?.toDouble() ?? 1.0,
-        pixels: pixels,
-      ));
+      layers.add(
+        PixelLayer(
+          name: entry['name'] as String? ?? 'Layer',
+          visible: entry['visible'] as bool? ?? true,
+          opacity: (entry['opacity'] as num?)?.toDouble() ?? 1.0,
+          pixels: pixels,
+        ),
+      );
     }
 
     final paletteJson = root['palette'];
+    if (paletteJson != null && paletteJson is! List) {
+      throw const FormatException('invalid rgpix palette');
+    }
+    if (paletteJson is List && paletteJson.any((entry) => entry is! String)) {
+      throw const FormatException('invalid rgpix palette color');
+    }
     final palette = <int>[
       if (paletteJson is List)
         for (final entry in paletteJson)
           if (entry is String) _hexToArgb(entry),
     ];
 
-    final settings = root['settings'];
-    final settingsMap =
-        settings is Map<String, dynamic> ? settings : const <String, dynamic>{};
-
     return RgpixFile(
-      document:
-          PixelDocument(width: width, height: height, layers: layers),
+      document: PixelDocument(width: width, height: height, layers: layers),
       palette: palette,
-      showPixelGrid: settingsMap['showPixelGrid'] as bool? ?? true,
-      showCellGrid: settingsMap['showCellGrid'] as bool? ?? true,
-      symmetry: settingsMap['symmetry'] as String? ?? 'none',
     );
   }
 }
@@ -237,7 +232,8 @@ Uint32List rgbaBytesToPixels(Uint8List bytes) {
   }
   final pixels = Uint32List(bytes.length ~/ 4);
   for (var i = 0; i < pixels.length; i++) {
-    pixels[i] = (bytes[i * 4 + 3] << 24) |
+    pixels[i] =
+        (bytes[i * 4 + 3] << 24) |
         (bytes[i * 4] << 16) |
         (bytes[i * 4 + 1] << 8) |
         bytes[i * 4 + 2];

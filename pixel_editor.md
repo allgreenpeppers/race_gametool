@@ -1,111 +1,114 @@
-# Pixel Editor (feat/pixel-editor) — work plan and task backup
+# Pixel Editor
 
-A built-in pixel drawing tool for authoring all Phase 1 source images.
-Scope agreed on 2026-07-13: the "advanced" tier — core editor plus
-selection/transform tools, symmetry, color replace, canvas operations, and
-.pal palette I/O. Layers/animation/blend modes are deferred, but the file
-format already carries a layer stack so those can land without breaking
-old files.
+The app includes a multi-tab pixel editor for creating and revising source
+images used by Asset Definer. User-facing UI uses the names **Asset Definer**,
+**Pixel Editor**, and **Level Editor**; Phase 1/2 remain internal engineering
+terms only.
 
-## Feature scope (first release)
+## Workspace and file flow
 
-Core:
-- Canvas with lossless zoom (FilterQuality.none), checkerboard transparency,
-  1 px pixel grid and 16 px cell grid overlays
-- Tools: pencil, eraser, line, rectangle, ellipse (outline via drag box),
-  bucket fill with tolerance + contiguous toggle, eyedropper
-- Brush sizes 1-8 (UI exposes 1-4)
-- Indexed palette panel (default DawnBringer 32), visual HSV sliders +
-  hex/AARRGGBB entry, add/remove palette entries
-- Unlimited undo/redo (history stack, capped at 256 snapshots)
-- Fixed keyboard shortcuts for tool switching
-- `.rgpix` project save/open (JSON: dimensions, layer stack, palette,
-  grid/symmetry settings)
-- PNG export
-- Auto-import into Phase 1 ("Send to Phase 1": track / island / decoration)
+- Pixel Editor documents open in independent, closable tabs with their own
+  canvas, selection, history, palette, dirty state, and file path.
+- While a Pixel Editor tab is active, the top-level File menu exposes New
+  Pixel Project, Open Pixel Project, Import Image, Export PNG, Save, and Save
+  As. Pixel-specific file commands are hidden in the other editors.
+- Import Image preserves exact dimensions and pixels: one source pixel maps to
+  one canvas pixel, with no scaling or filtering.
+- Asset Definer images have an **Edit in Pixel Editor** action. If the image has
+  an embedded `.rgpix` source, it is restored exactly; older PNG-only bundles
+  are opened as a one-layer pixel document at their native resolution.
+- **Send to Asset Definer** stores both the flattened PNG and editable `.rgpix`
+  source. Saving a tab opened from Asset Definer updates the same embedded
+  source without requiring a separate project file.
+- `.rgpack` version 4 stores the editable pixel source as an optional entry per
+  source image, including each decoration image. Bundles without these entries
+  remain readable and editable through the PNG fallback.
 
-Advanced (same release):
-- Selection: rectangle, lasso (polygon), magic wand (tolerance + contiguous)
-- Move/transform: floating selection with drag move, nearest-neighbor corner
-  scaling (resampled from the lifted original, no compounding loss),
-  rotate 90 CW/CCW, flip H/V; Esc cancels, click outside commits
-- Every drawing tool respects the active selection mask
-- Symmetry drawing: X mirror, Y mirror, XY
-- Color replace = fill tool with contiguous off (recolors all matching)
-- Canvas: resize with 9-way anchor, crop to selection, rotate/flip whole
-  canvas
-- Palette import/export as JASC `.pal`
+The `.rgpack` remains the single source of truth. Embedded pixel data is source
+material inside the bundle, not a second export path; packed sheets and sprite
+dictionaries continue to be derived by the existing bundle pipeline.
 
-Deferred (format-ready, not in this release): layer UI + blend modes,
-animation frames + sprite sheet export, isometric grid, dithered gradient,
-custom shortcut editing.
+## Editing tools
 
-## Architecture
+- Pencil and eraser use a 1–32 px slider.
+- Line, rectangle, and ellipse use pixel-accurate previews and commit as one
+  undo step.
+- Rectangle and ellipse support two interaction modes:
+  - **Drag**: drag the bounds and hold Shift for a square or circle.
+  - **Plan**: draw initial bounds, adjust the four side handles, then Confirm
+    or Cancel.
+- Fill supports a 0–255 per-channel color tolerance and **Connected only**.
+  When enabled, filling follows the four-directionally connected region
+  containing the clicked pixel. When disabled, it replaces every matching
+  color on the canvas. Tolerance 0 is an exact match; higher values include
+  increasingly similar colors.
+- Fill can enable **Shade variation** for a Minecraft-like textured color.
+  It keeps the chosen color as the base and adds stable, clustered light and
+  dark variations. The 1–32 Shade control changes the contrast; the pattern
+  is coordinate-based, so it does not flicker or change when the canvas
+  repaints.
+- Eyedropper, horizontal/vertical/both-axis symmetry, canvas resize/crop,
+  rotate, flip, and JASC `.pal` import/export are available.
 
-- `lib/models/pixel_document.dart` — PixelLayer / PixelDocument (ARGB
-  Uint32List buffers), source-over compositing, RgpixFile encode/decode.
-  No dart:ui (CLI-safe, same rule as the other models).
-- `lib/logic/pixel_ops.dart` — pure buffer ops: Bresenham line, rect,
-  Zingl midpoint ellipse, flood fill (tolerance/contiguous/selection mask),
-  magic wand, rect/polygon selection masks, lift/blit for floating
-  selections, nearest-neighbor scale, rotate90, flips, canvas resize
-  (anchored) and crop, symmetry point expansion.
-- `lib/logic/pal_file.dart` — JASC-PAL text format encode/decode.
-- `lib/state/pixel_editor_providers.dart` — Riverpod Notifier: tool state,
-  stroke lifecycle (preview by repainting from a stroke-base copy so
-  preview and commit share one code path), undo/redo snapshots, composited
-  ui.Image cache (generation-guarded async decode), floating selection,
-  file I/O, Send-to-Phase-1.
-- `lib/ui/pixel_editor/pixel_canvas.dart` — InteractiveViewer canvas
-  (same zoom/pan conventions as the Phase 1/2 canvases), painter for
-  checkerboard/image/grids/selection/floating chrome/hover.
-- `lib/ui/pixel_editor/color_panel.dart` — color + palette panel.
-- `lib/ui/pixel_editor/pixel_editor_page.dart` — page layout, toolbar,
-  dialogs (new/resize/send), keyboard shortcuts.
-- Shell: a pinned "Pixel Editor" tab next to Phase 1
-  (`WorkspaceState.pixelEditorActive`, `AppMode.pixelEditor`); Save /
-  Save As / Undo menu routing; quit prompt covers dirty pixel art.
-  Phase 1 gains one additive method
-  (`AssetDefinerNotifier.importImageBytes`) and Phase 2 is untouched
-  (explicit constraint: keep impact on existing phases minimal).
+## Selection and clipboard
 
-## File formats
+The three selection modes are rectangle, lasso, and magic wand.
 
-`.rgpix` (JSON):
-```json
-{
-  "format": "rgpix", "version": 1,
-  "width": 128, "height": 128,
-  "layers": [
-    {"name": "Layer 1", "visible": true, "opacity": 1.0,
-     "pixels": "<base64 of row-major RGBA bytes>"}
-  ],
-  "palette": ["#ff000000", "..."],
-  "settings": {"showPixelGrid": true, "showCellGrid": true, "symmetry": "none"}
-}
-```
+- Marquee and lasso selection automatically discard transparent padding, so
+  the canvas draws the outer edge of actual image pixels rather than the full
+  drag rectangle. Irregular selections do not show horizontal interior bands.
+- Holding Shift adds the new mask to the current selection in all three modes.
+- Dragging selected pixels lifts them into a floating selection directly; a
+  separate Move tool is not required. The floating selection can be resized
+  with nearest-neighbour corner handles. Escape restores the original pixels;
+  clicking outside commits.
+- Switching to any drawing tool cancels the selection first, so pencil,
+  eraser, fill, and shapes always operate on the normal canvas. Select again
+  when a limited edit or transform is wanted.
+- Copy, Cut, and Paste work from the Edit menu, toolbar, and standard keyboard
+  shortcuts. Pixel data is shared between Pixel Editor tabs and mirrored to
+  the system clipboard in the app's versioned JSON clipboard format.
 
-`.pal`: JASC-PAL ("JASC-PAL" / "0100" / count / "r g b" lines).
+## Colors
 
-## Task list (backup of the session tracker)
+- Each document owns its editable palette; new documents start with the
+  DawnBringer 32 palette and `.rgpix` files preserve an intentionally empty
+  palette.
+- A separate **Image Colors** section lists up to 256 frequent non-transparent
+  colors from the current image. It is a pick-only convenience section and can
+  be refreshed after editing.
+- HSV controls and hex/AARRGGBB entry edit the active color, and palettes can be
+  imported or exported as JASC `.pal` files.
 
-| # | Task | Status |
-|---|------|--------|
-| 1 | Core: pixel document model + pure drawing ops + .rgpix format (`pixel_document.dart`, `pixel_ops.dart`, `pal_file.dart`) | completed |
-| 2 | Core: pixel editor state notifier (tools, stroke lifecycle, undo/redo, image cache, file I/O, Send to Phase 1; `pixel_editor_providers.dart`, `importImageBytes` in Phase 1 notifier, workspace pixel tab state) | completed |
-| 3 | Core: pixel editor UI (`pixel_canvas.dart`, `color_panel.dart`, `pixel_editor_page.dart`) + app_shell integration (tab chip, page routing, save/undo routing, quit prompt, status bar) | completed |
-| 4 | Core: tests + verification loop | completed |
-| 5 | Advanced: selection tools (rect/lasso/wand) + move/transform | completed (built with core, proven by notifier tests) |
-| 6 | Advanced: symmetry, color replace, canvas resize/crop/rotate/flip, .pal I/O | completed (built with core) |
-| 7 | Advanced: tests + verification loop + commit | completed |
+## Settings ownership
 
-Progress notes:
-- The advanced state machinery was designed together with the core
-  notifier, so the whole feature landed as a single commit instead of the
-  originally suggested two.
-- 58 new tests: `test/pixel_ops_test.dart` + `test/pixel_document_test.dart`
-  (35, pure layer) and `test/pixel_editor_test.dart` (23, notifier behavior
-  including selection masking, floating moves, symmetry, canvas ops, and
-  the Send-to-Phase-1 hand-off).
-- Verification loop green: `flutter analyze` clean, full `flutter test`
-  suite (169) passing, `flutter build macos --debug` succeeds.
+The following are session-wide Pixel Editor preferences shared by every tab
+and do not dirty a document: brush size, fill tolerance, Connected only,
+Shade variation and strength, symmetry, pixel grid, 16 px cell grid, and
+rectangle/ellipse interaction mode.
+
+Document-owned state is limited to canvas dimensions, layers/pixels, and the
+editable palette. Tool choice, selection/floating state, image-color helpers,
+undo/redo history, and active color are tab-local working state. Presentation
+and tool preferences are intentionally not serialized into `.rgpix`.
+
+## File formats and architecture
+
+`.rgpix` version 1 is JSON containing dimensions, a bottom-to-top layer stack,
+and palette. Layer pixels are portable row-major RGBA bytes encoded as base64.
+Older files that contain the former `settings` object remain readable; that
+field is ignored because settings now belong to the app session.
+
+- `lib/models/pixel_document.dart`: document/layer model and `.rgpix` codec;
+  deliberately has no `dart:ui` dependency.
+- `lib/logic/pixel_ops.dart`: pure buffer operations for drawing, fill,
+  selection, transforms, image colors, and resize/crop.
+- `lib/state/pixel_editor_providers.dart`: Riverpod family provider for
+  tab-local editor state plus shared preferences and clipboard providers.
+- `lib/ui/pixel_editor/`: canvas, options toolbar, color panel, and dialogs.
+- `lib/logic/asset_bundle.dart`: optional embedded `.rgpix` entries and
+  backwards-compatible bundle reading.
+
+Layers/blend-mode UI and animation remain deferred; the document model and
+file format already retain a layer stack so they can be added without changing
+the current single-layer editing flow.

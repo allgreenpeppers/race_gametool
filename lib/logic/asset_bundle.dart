@@ -27,12 +27,16 @@ class BundleSource {
     required this.name,
     required this.imageBytes,
     required this.masks,
+    this.pixelProjectBytes,
   });
 
   final BlockCategory category;
   final String name;
   final Uint8List imageBytes;
   final List<MaskDraft> masks;
+
+  /// Optional editable `.rgpix` source for images authored in Pixel Editor.
+  final Uint8List? pixelProjectBytes;
 }
 
 /// A decoration image read back out of a bundle, paired with the masks that
@@ -42,11 +46,13 @@ class BundleDecorationSource {
     required this.imageBytes,
     required this.name,
     required this.masks,
+    this.pixelProjectBytes,
   });
 
   final Uint8List imageBytes;
   final String name;
   final List<MaskDraft> masks;
+  final Uint8List? pixelProjectBytes;
 }
 
 /// Everything read back out of a .rgpack. Splits cleanly into the two
@@ -63,6 +69,7 @@ class AssetBundleData {
     required this.blocks,
     required this.cellSize,
     this.categoryRawImages = const {},
+    this.categoryPixelProjects = const {},
     this.decorationSources = const [],
   });
 
@@ -77,6 +84,10 @@ class AssetBundleData {
   /// Per-category raw source images, for the single-image categories
   /// (everything except decoration). Empty for legacy single-image bundles.
   final Map<BlockCategory, Uint8List> categoryRawImages;
+
+  /// Optional `.rgpix` project paired with each single-image category.
+  /// Empty for bundles written before embedded pixel sources were supported.
+  final Map<BlockCategory, Uint8List> categoryPixelProjects;
 
   /// Decoration images, each with its own masks. May hold several entries;
   /// empty for v1/v2 bundles (their decoration masks arrive via
@@ -119,6 +130,7 @@ Uint8List writeAssetBundle({
   // per-category name; decoration numbers each image so they stay distinct.
   // Decoration masks record their source index so the grouping round-trips.
   final rawFiles = <String>[];
+  final pixelProjectFiles = <String?>[];
   final sourceMeta = <Map<String, dynamic>>[];
   final maskJson = <Map<String, dynamic>>[];
   var decoIndex = 0;
@@ -133,10 +145,15 @@ Uint8List writeAssetBundle({
       file = 'raw_source_${s.category.jsonValue.toLowerCase()}.png';
     }
     rawFiles.add(file);
+    final pixelProjectFile = s.pixelProjectBytes == null
+        ? null
+        : file.replaceFirst(RegExp(r'\.png$'), '.rgpix');
+    pixelProjectFiles.add(pixelProjectFile);
     sourceMeta.add({
       'category': s.category.jsonValue,
       'name': s.name,
       'file': file,
+      'pixelProject': ?pixelProjectFile,
     });
     for (final m in s.masks) {
       final mj = m.toJson();
@@ -146,7 +163,7 @@ Uint8List writeAssetBundle({
   }
 
   final editorJson = const JsonEncoder.withIndent('  ').convert({
-    'version': 3,
+    'version': 4,
     'cellSize': GridConstants.cellSize.round(),
     'imageName': imageName,
     'masks': maskJson,
@@ -155,7 +172,7 @@ Uint8List writeAssetBundle({
 
   final manifestJson = const JsonEncoder.withIndent('  ').convert({
     'format': 'race_gametool.assets',
-    'version': 3,
+    'version': 4,
     'cellSize': GridConstants.cellSize.round(),
     'blockCount': export.blocks.length,
     'entries': {
@@ -176,6 +193,11 @@ Uint8List writeAssetBundle({
 
   for (var i = 0; i < sources.length; i++) {
     archive.addFile(_bytesFile(rawFiles[i], sources[i].imageBytes));
+    final pixelProjectFile = pixelProjectFiles[i];
+    final pixelProjectBytes = sources[i].pixelProjectBytes;
+    if (pixelProjectFile != null && pixelProjectBytes != null) {
+      archive.addFile(_bytesFile(pixelProjectFile, pixelProjectBytes));
+    }
   }
 
   return Uint8List.fromList(ZipEncoder().encodeBytes(archive));
@@ -200,8 +222,8 @@ AssetBundleData readAssetBundle(Uint8List zipBytes) {
 
   String requireText(String name) => utf8.decode(requireBytes(name));
 
-  final editor = jsonDecode(requireText(BundleEntries.editor))
-      as Map<String, dynamic>;
+  final editor =
+      jsonDecode(requireText(BundleEntries.editor)) as Map<String, dynamic>;
   final dictJson = requireText(BundleEntries.spriteDict);
   final parsed = parseSpriteDict(dictJson);
 
@@ -211,6 +233,7 @@ AssetBundleData readAssetBundle(Uint8List zipBytes) {
       .toList();
 
   final categoryRawImages = <BlockCategory, Uint8List>{};
+  final categoryPixelProjects = <BlockCategory, Uint8List>{};
   final decorationSources = <BundleDecorationSource>[];
 
   final sourcesMeta = editor['sources'] as List<dynamic>?;
@@ -232,15 +255,25 @@ AssetBundleData readAssetBundle(Uint8List zipBytes) {
       final name = m['name'] as String? ?? file;
       final bytes = optionalBytes(file);
       if (bytes == null) continue;
+      final pixelProjectFile = m['pixelProject'] as String?;
+      final pixelProjectBytes = pixelProjectFile == null
+          ? null
+          : optionalBytes(pixelProjectFile);
       if (cat == BlockCategory.decoration) {
-        decorationSources.add(BundleDecorationSource(
-          imageBytes: bytes,
-          name: name,
-          masks: decoMasksByIndex[decoIndex] ?? const [],
-        ));
+        decorationSources.add(
+          BundleDecorationSource(
+            imageBytes: bytes,
+            name: name,
+            masks: decoMasksByIndex[decoIndex] ?? const [],
+            pixelProjectBytes: pixelProjectBytes,
+          ),
+        );
         decoIndex++;
       } else {
         categoryRawImages[cat] = bytes;
+        if (pixelProjectBytes != null) {
+          categoryPixelProjects[cat] = pixelProjectBytes;
+        }
       }
     }
   } else {
@@ -261,9 +294,10 @@ AssetBundleData readAssetBundle(Uint8List zipBytes) {
     sheetBytes: requireBytes(BundleEntries.spriteSheet),
     spriteDictJson: dictJson,
     blocks: parsed.blocks,
-    cellSize: (editor['cellSize'] as num?)?.round() ??
-        GridConstants.cellSize.round(),
+    cellSize:
+        (editor['cellSize'] as num?)?.round() ?? GridConstants.cellSize.round(),
     categoryRawImages: categoryRawImages,
+    categoryPixelProjects: categoryPixelProjects,
     decorationSources: decorationSources,
   );
 }
@@ -276,7 +310,8 @@ GameAssets extractGameAssets(Uint8List zipBytes) {
   final dict = archive.findFile(BundleEntries.spriteDict);
   if (sheet == null || dict == null) {
     throw const FormatException(
-        'Bundle is missing the packed sheet or sprite dictionary');
+      'Bundle is missing the packed sheet or sprite dictionary',
+    );
   }
   return GameAssets(
     sheetBytes: sheet.readBytes() ?? Uint8List(0),

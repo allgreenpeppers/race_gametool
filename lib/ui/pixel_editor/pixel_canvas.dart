@@ -14,7 +14,9 @@ import '../../state/pixel_editor_providers.dart';
 /// drawn with FilterQuality.none), plus checkerboard, grids, selection
 /// overlays, and the floating-selection handles.
 class PixelCanvas extends ConsumerStatefulWidget {
-  const PixelCanvas({super.key});
+  const PixelCanvas({super.key, required this.tabId});
+
+  final int tabId;
 
   @override
   ConsumerState<PixelCanvas> createState() => _PixelCanvasState();
@@ -46,13 +48,16 @@ class _PixelCanvasState extends ConsumerState<PixelCanvas> {
   void _fitToViewport(BoxConstraints constraints, int w, int h) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final scale = math.min(
-              constraints.maxWidth / w, constraints.maxHeight / h) *
-          0.85;
+      final scale =
+          math.min(constraints.maxWidth / w, constraints.maxHeight / h) * 0.85;
       final clamped = scale.clamp(_minScale, _maxScale);
       final matrix = Matrix4.identity()
-        ..translateByDouble((constraints.maxWidth - w * clamped) / 2,
-            (constraints.maxHeight - h * clamped) / 2, 0, 1)
+        ..translateByDouble(
+          (constraints.maxWidth - w * clamped) / 2,
+          (constraints.maxHeight - h * clamped) / 2,
+          0,
+          1,
+        )
         ..scaleByDouble(clamped, clamped, 1, 1);
       _transform.value = matrix;
     });
@@ -70,7 +75,10 @@ class _PixelCanvasState extends ConsumerState<PixelCanvas> {
       Offset(f.offsetX.toDouble(), f.offsetY.toDouble()),
       Offset((f.offsetX + f.width).toDouble(), f.offsetY.toDouble()),
       Offset(f.offsetX.toDouble(), (f.offsetY + f.height).toDouble()),
-      Offset((f.offsetX + f.width).toDouble(), (f.offsetY + f.height).toDouble()),
+      Offset(
+        (f.offsetX + f.width).toDouble(),
+        (f.offsetY + f.height).toDouble(),
+      ),
     ];
     for (var i = 0; i < corners.length; i++) {
       if ((pos - corners[i]).distance <= r) return i;
@@ -78,10 +86,34 @@ class _PixelCanvasState extends ConsumerState<PixelCanvas> {
     return null;
   }
 
+  int? _shapePlanHandleAt(Offset pos, PixelEditorState state) {
+    final plan = state.shapePlan;
+    if (plan == null) return null;
+    final scale = _transform.value.getMaxScaleOnAxis();
+    final radius = 8.0 / scale;
+    final rect = Rect.fromLTRB(
+      plan.left.toDouble(),
+      plan.top.toDouble(),
+      plan.right + 1.0,
+      plan.bottom + 1.0,
+    );
+    final handles = [
+      Offset(rect.left, rect.center.dy),
+      Offset(rect.center.dx, rect.top),
+      Offset(rect.right, rect.center.dy),
+      Offset(rect.center.dx, rect.bottom),
+    ];
+    for (var i = 0; i < handles.length; i++) {
+      if ((pos - handles[i]).distance <= radius) return i;
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final state = ref.watch(pixelEditorProvider);
-    final notifier = ref.read(pixelEditorProvider.notifier);
+    final state = ref.watch(pixelEditorProvider(widget.tabId));
+    final preferences = ref.watch(pixelEditorPreferencesProvider);
+    final notifier = ref.read(pixelEditorProvider(widget.tabId).notifier);
     final w = state.document.width;
     final h = state.document.height;
 
@@ -109,7 +141,8 @@ class _PixelCanvasState extends ConsumerState<PixelCanvas> {
             },
             onPointerSignal: (event) {
               if (event is! PointerScrollEvent) return;
-              final isZoomKey = HardwareKeyboard.instance.isControlPressed ||
+              final isZoomKey =
+                  HardwareKeyboard.instance.isControlPressed ||
                   HardwareKeyboard.instance.isMetaPressed;
               if (isZoomKey) {
                 final dy = event.scrollDelta.dy;
@@ -119,8 +152,10 @@ class _PixelCanvasState extends ConsumerState<PixelCanvas> {
                 final tx = matrix.storage[12];
                 final ty = matrix.storage[13];
                 final currentScale = matrix.getMaxScaleOnAxis();
-                final newScale =
-                    (currentScale * scaleDelta).clamp(_minScale, _maxScale);
+                final newScale = (currentScale * scaleDelta).clamp(
+                  _minScale,
+                  _maxScale,
+                );
                 final actualFactor = newScale / currentScale;
                 if (actualFactor == 1.0) return;
                 final px = event.localPosition.dx;
@@ -142,43 +177,63 @@ class _PixelCanvasState extends ConsumerState<PixelCanvas> {
               gestures: {
                 _LeftClickPanGestureRecognizer:
                     GestureRecognizerFactoryWithHandlers<
-                        _LeftClickPanGestureRecognizer>(
-                  () => _LeftClickPanGestureRecognizer(
-                    allowedButtonsFilter: (buttons) =>
-                        buttons == kPrimaryButton,
-                  ),
-                  (instance) {
-                    instance
-                      ..onStart = (details) {
-                        final pos = details.localPosition;
-                        if (state.tool == PixelTool.move) {
-                          final corner = _handleAt(pos, state);
-                          if (corner != null) {
-                            notifier.startHandleScale(corner);
+                      _LeftClickPanGestureRecognizer
+                    >(
+                      () => _LeftClickPanGestureRecognizer(
+                        allowedButtonsFilter: (buttons) =>
+                            buttons == kPrimaryButton,
+                      ),
+                      (instance) {
+                        instance
+                          ..onStart = (details) {
+                            final pos = details.localPosition;
+                            if (state.floating != null) {
+                              final corner = _handleAt(pos, state);
+                              if (corner != null) {
+                                notifier.startHandleScale(corner);
+                              }
+                            }
+                            if (state.shapePlan != null) {
+                              final edge = _shapePlanHandleAt(pos, state);
+                              if (edge != null) {
+                                notifier.startShapePlanAdjustment(edge);
+                              }
+                            }
+                            notifier.strokeStart(
+                              pos.dx,
+                              pos.dy,
+                              additiveSelection:
+                                  HardwareKeyboard.instance.isShiftPressed,
+                            );
                           }
-                        }
-                        notifier.strokeStart(pos.dx, pos.dy);
-                      }
-                      ..onUpdate = (details) {
-                        notifier.strokeUpdate(details.localPosition.dx,
-                            details.localPosition.dy);
-                      }
-                      ..onEnd = (_) {
-                        notifier.strokeEnd();
-                      };
-                  },
-                ),
+                          ..onUpdate = (details) {
+                            notifier.strokeUpdate(
+                              details.localPosition.dx,
+                              details.localPosition.dy,
+                              constrainShape:
+                                  HardwareKeyboard.instance.isShiftPressed,
+                            );
+                          }
+                          ..onEnd = (_) {
+                            notifier.strokeEnd();
+                          };
+                      },
+                    ),
                 TapGestureRecognizer:
                     GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
-                  () => TapGestureRecognizer(
-                    allowedButtonsFilter: (buttons) =>
-                        buttons == kPrimaryButton,
-                  ),
-                  (instance) {
-                    instance.onTapUp = (details) => notifier.tapAt(
-                        details.localPosition.dx, details.localPosition.dy);
-                  },
-                ),
+                      () => TapGestureRecognizer(
+                        allowedButtonsFilter: (buttons) =>
+                            buttons == kPrimaryButton,
+                      ),
+                      (instance) {
+                        instance.onTapUp = (details) => notifier.tapAt(
+                          details.localPosition.dx,
+                          details.localPosition.dy,
+                          additiveSelection:
+                              HardwareKeyboard.instance.isShiftPressed,
+                        );
+                      },
+                    ),
               },
               child: MouseRegion(
                 cursor: SystemMouseCursors.precise,
@@ -189,6 +244,7 @@ class _PixelCanvasState extends ConsumerState<PixelCanvas> {
                   size: Size(w.toDouble(), h.toDouble()),
                   painter: _PixelCanvasPainter(
                     state: state,
+                    preferences: preferences,
                     scale: _transform.value.getMaxScaleOnAxis(),
                     hover: _hover,
                   ),
@@ -205,11 +261,13 @@ class _PixelCanvasState extends ConsumerState<PixelCanvas> {
 class _PixelCanvasPainter extends CustomPainter {
   const _PixelCanvasPainter({
     required this.state,
+    required this.preferences,
     required this.scale,
     required this.hover,
   });
 
   final PixelEditorState state;
+  final PixelEditorPreferences preferences;
   final double scale;
   final Offset? hover;
 
@@ -236,38 +294,57 @@ class _PixelCanvasPainter extends CustomPainter {
     if (floating != null && floatingImage != null) {
       canvas.drawImageRect(
         floatingImage,
-        Rect.fromLTWH(0, 0, floatingImage.width.toDouble(),
-            floatingImage.height.toDouble()),
-        Rect.fromLTWH(floating.offsetX.toDouble(), floating.offsetY.toDouble(),
-            floating.width.toDouble(), floating.height.toDouble()),
+        Rect.fromLTWH(
+          0,
+          0,
+          floatingImage.width.toDouble(),
+          floatingImage.height.toDouble(),
+        ),
+        Rect.fromLTWH(
+          floating.offsetX.toDouble(),
+          floating.offsetY.toDouble(),
+          floating.width.toDouble(),
+          floating.height.toDouble(),
+        ),
         Paint()..filterQuality = FilterQuality.none,
       );
     }
 
-    if (state.showPixelGrid && scale >= 8) _paintGrid(canvas, w, h, 1, 0.35);
-    if (state.showCellGrid && scale * GridConstants.cellSize >= 24) {
+    if (preferences.showPixelGrid && scale >= 8) {
+      _paintGrid(canvas, w, h, 1, 0.35);
+    }
+    if (preferences.showCellGrid && scale * GridConstants.cellSize >= 24) {
       _paintGrid(canvas, w, h, GridConstants.cellSize.toInt(), 0.7);
     }
-    if (state.symmetry != SymmetryMode.none) _paintSymmetryAxes(canvas, w, h);
+    if (preferences.symmetry != SymmetryMode.none) {
+      _paintSymmetryAxes(canvas, w, h);
+    }
 
     final selection = state.selection;
     if (selection != null) _paintSelection(canvas, selection, w, h);
     if (state.selectDraft != null) _paintSelectDraft(canvas);
     if (state.lassoDraft != null) _paintLassoDraft(canvas);
+    if (state.shapePlan != null) _paintShapePlan(canvas);
     if (floating != null) _paintFloatingChrome(canvas, floating);
     if (hover != null) _paintHover(canvas, w, h);
   }
 
   void _paintCheckerboard(Canvas canvas, int w, int h) {
     const tile = 8;
-    canvas.drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
-        Paint()..color = const Color(0xffb8b8b8));
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
+      Paint()..color = const Color(0xffb8b8b8),
+    );
     final dark = Paint()..color = const Color(0xff909090);
     for (var y = 0; y * tile < h; y++) {
       for (var x = y.isEven ? 1 : 0; x * tile < w; x += 2) {
         canvas.drawRect(
-          Rect.fromLTWH((x * tile).toDouble(), (y * tile).toDouble(),
-              tile.toDouble(), tile.toDouble()),
+          Rect.fromLTWH(
+            (x * tile).toDouble(),
+            (y * tile).toDouble(),
+            tile.toDouble(),
+            tile.toDouble(),
+          ),
           dark,
         );
       }
@@ -280,11 +357,17 @@ class _PixelCanvasPainter extends CustomPainter {
       ..strokeWidth = 1 / scale;
     for (var x = step; x < w; x += step) {
       canvas.drawLine(
-          Offset(x.toDouble(), 0), Offset(x.toDouble(), h.toDouble()), paint);
+        Offset(x.toDouble(), 0),
+        Offset(x.toDouble(), h.toDouble()),
+        paint,
+      );
     }
     for (var y = step; y < h; y += step) {
       canvas.drawLine(
-          Offset(0, y.toDouble()), Offset(w.toDouble(), y.toDouble()), paint);
+        Offset(0, y.toDouble()),
+        Offset(w.toDouble(), y.toDouble()),
+        paint,
+      );
     }
   }
 
@@ -292,38 +375,47 @@ class _PixelCanvasPainter extends CustomPainter {
     final paint = Paint()
       ..color = const Color(0xccff5588)
       ..strokeWidth = 1.5 / scale;
-    if (state.symmetry == SymmetryMode.horizontal ||
-        state.symmetry == SymmetryMode.both) {
-      canvas.drawLine(
-          Offset(w / 2, 0), Offset(w / 2, h.toDouble()), paint);
+    if (preferences.symmetry == SymmetryMode.horizontal ||
+        preferences.symmetry == SymmetryMode.both) {
+      canvas.drawLine(Offset(w / 2, 0), Offset(w / 2, h.toDouble()), paint);
     }
-    if (state.symmetry == SymmetryMode.vertical ||
-        state.symmetry == SymmetryMode.both) {
-      canvas.drawLine(
-          Offset(0, h / 2), Offset(w.toDouble(), h / 2), paint);
+    if (preferences.symmetry == SymmetryMode.vertical ||
+        preferences.symmetry == SymmetryMode.both) {
+      canvas.drawLine(Offset(0, h / 2), Offset(w.toDouble(), h / 2), paint);
     }
   }
 
-  /// Selected region: translucent fill plus a solid outline along the mask
-  /// boundary, built from horizontal runs.
+  /// Draw only mask boundary edges. Stroking each horizontal run separately
+  /// creates distracting lines through lasso/wand selections.
   void _paintSelection(Canvas canvas, Uint8List selection, int w, int h) {
     final path = Path();
+    bool selected(int x, int y) =>
+        x >= 0 && y >= 0 && x < w && y < h && selection[y * w + x] != 0;
     for (var y = 0; y < h; y++) {
-      var x = 0;
-      while (x < w) {
-        if (selection[y * w + x] == 0) {
-          x++;
-          continue;
+      for (var x = 0; x < w; x++) {
+        if (!selected(x, y)) continue;
+        if (!selected(x, y - 1)) {
+          path
+            ..moveTo(x.toDouble(), y.toDouble())
+            ..lineTo((x + 1).toDouble(), y.toDouble());
         }
-        final start = x;
-        while (x < w && selection[y * w + x] != 0) {
-          x++;
+        if (!selected(x + 1, y)) {
+          path
+            ..moveTo((x + 1).toDouble(), y.toDouble())
+            ..lineTo((x + 1).toDouble(), (y + 1).toDouble());
         }
-        path.addRect(Rect.fromLTRB(
-            start.toDouble(), y.toDouble(), x.toDouble(), (y + 1).toDouble()));
+        if (!selected(x, y + 1)) {
+          path
+            ..moveTo((x + 1).toDouble(), (y + 1).toDouble())
+            ..lineTo(x.toDouble(), (y + 1).toDouble());
+        }
+        if (!selected(x - 1, y)) {
+          path
+            ..moveTo(x.toDouble(), (y + 1).toDouble())
+            ..lineTo(x.toDouble(), y.toDouble());
+        }
       }
     }
-    canvas.drawPath(path, Paint()..color = const Color(0x3342a5f5));
     canvas.drawPath(
       path,
       Paint()
@@ -387,9 +479,48 @@ class _PixelCanvasPainter extends CustomPainter {
       rect.topLeft,
       rect.topRight,
       rect.bottomLeft,
-      rect.bottomRight
+      rect.bottomRight,
     ]) {
       canvas.drawRect(Rect.fromCircle(center: corner, radius: r), handle);
+    }
+  }
+
+  void _paintShapePlan(Canvas canvas) {
+    final plan = state.shapePlan!;
+    final rect = Rect.fromLTRB(
+      plan.left.toDouble(),
+      plan.top.toDouble(),
+      plan.right + 1.0,
+      plan.bottom + 1.0,
+    );
+    final shapePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5 / scale
+      ..color = Color(state.color);
+    if (state.tool == PixelTool.ellipse) {
+      canvas.drawOval(rect, shapePaint);
+    } else {
+      canvas.drawRect(rect, shapePaint);
+    }
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1 / scale
+        ..color = const Color(0xffffc107),
+    );
+    final handlePaint = Paint()..color = const Color(0xffffc107);
+    final radius = 4.0 / scale;
+    for (final center in [
+      Offset(rect.left, rect.center.dy),
+      Offset(rect.center.dx, rect.top),
+      Offset(rect.right, rect.center.dy),
+      Offset(rect.center.dx, rect.bottom),
+    ]) {
+      canvas.drawRect(
+        Rect.fromCircle(center: center, radius: radius),
+        handlePaint,
+      );
     }
   }
 
@@ -397,11 +528,15 @@ class _PixelCanvasPainter extends CustomPainter {
     final x = hover!.dx.floor();
     final y = hover!.dy.floor();
     if (x < 0 || y < 0 || x >= w || y >= h) return;
-    final brush = state.brushSize;
+    final brush = preferences.brushSize;
     final start = -(brush - 1) ~/ 2;
     canvas.drawRect(
-      Rect.fromLTWH((x + start).toDouble(), (y + start).toDouble(),
-          brush.toDouble(), brush.toDouble()),
+      Rect.fromLTWH(
+        (x + start).toDouble(),
+        (y + start).toDouble(),
+        brush.toDouble(),
+        brush.toDouble(),
+      ),
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1 / scale
@@ -414,12 +549,10 @@ class _PixelCanvasPainter extends CustomPainter {
       oldDelegate.state.revision != state.revision ||
       oldDelegate.state.canvasImage != state.canvasImage ||
       oldDelegate.state.floatingImage != state.floatingImage ||
+      oldDelegate.state.shapePlan != state.shapePlan ||
       oldDelegate.scale != scale ||
       oldDelegate.hover != hover ||
-      oldDelegate.state.showPixelGrid != state.showPixelGrid ||
-      oldDelegate.state.showCellGrid != state.showCellGrid ||
-      oldDelegate.state.symmetry != state.symmetry ||
-      oldDelegate.state.brushSize != state.brushSize;
+      oldDelegate.preferences != preferences;
 }
 
 /// Left-button drag recognizer that ignores trackpad pan-zoom pointers, same
