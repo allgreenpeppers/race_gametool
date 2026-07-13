@@ -52,7 +52,7 @@ class LevelEditorPage extends ConsumerWidget {
                           if (event is KeyDownEvent) {
                             final isControlPressed =
                                 HardwareKeyboard.instance.isControlPressed ||
-                                    HardwareKeyboard.instance.isMetaPressed;
+                                HardwareKeyboard.instance.isMetaPressed;
                             if (isControlPressed &&
                                 event.logicalKey == LogicalKeyboardKey.keyZ) {
                               notifier.undo();
@@ -95,8 +95,9 @@ class _Palette extends StatelessWidget {
     return Consumer(
       builder: (context, ref, _) {
         final library = ref.watch(assetLibraryProvider);
-        final activeLayer =
-            ref.watch(levelEditorProvider(tabId).select((s) => s.activeLayer));
+        final activeLayer = ref.watch(
+          levelEditorProvider(tabId).select((s) => s.activeLayer),
+        );
         final theme = Theme.of(context);
         // Only show blocks whose category belongs to the active layer.
         final blocks = [
@@ -110,14 +111,18 @@ class _Palette extends StatelessWidget {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                child:
-                    Text('Block Palette', style: theme.textTheme.titleMedium),
+                child: Text(
+                  'Block Palette',
+                  style: theme.textTheme.titleMedium,
+                ),
               ),
               if (library.sourceName != null)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                  child: Text('Source: ${library.sourceName}',
-                      style: theme.textTheme.bodySmall),
+                  child: Text(
+                    'Source: ${library.sourceName}',
+                    style: theme.textTheme.bodySmall,
+                  ),
                 ),
               Expanded(
                 child: library.isEmpty
@@ -126,24 +131,24 @@ class _Palette extends StatelessWidget {
                           padding: const EdgeInsets.all(16),
                           child: Text(
                             'No blocks loaded. Open a config via File > '
-                            'Open Config..., or save one in Phase 1.',
+                            'Open Config..., or save one in Asset Definer.',
                             textAlign: TextAlign.center,
                             style: theme.textTheme.bodySmall,
                           ),
                         ),
                       )
                     : blocks.isEmpty
-                        ? Center(
-                            child: Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Text(
-                                'No ${activeLayer.label} blocks in this bundle.',
-                                textAlign: TextAlign.center,
-                                style: theme.textTheme.bodySmall,
-                              ),
-                            ),
-                          )
-                        : ListView.builder(
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Text(
+                            'No ${activeLayer.label} blocks in this bundle.',
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        ),
+                      )
+                    : ListView.builder(
                         itemCount: blocks.length,
                         itemBuilder: (context, index) {
                           final block = blocks[index];
@@ -152,7 +157,8 @@ class _Palette extends StatelessWidget {
                             dense: true,
                             selected: selected,
                             selectedTileColor: theme
-                                .colorScheme.primaryContainer
+                                .colorScheme
+                                .primaryContainer
                                 .withValues(alpha: 0.4),
                             leading: SizedBox(
                               width: 40,
@@ -166,9 +172,10 @@ class _Palette extends StatelessWidget {
                             ),
                             title: Text(block.id),
                             subtitle: Text(
-                                '${block.boundingBox.width} x '
-                                '${block.boundingBox.height}, '
-                                '${block.ports.length} ports'),
+                              '${block.boundingBox.width} x '
+                              '${block.boundingBox.height}, '
+                              '${block.ports.length} ports',
+                            ),
                             onTap: () => onSelect(block.id),
                           );
                         },
@@ -181,5 +188,3 @@ class _Palette extends StatelessWidget {
     );
   }
 }
-
-

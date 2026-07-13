@@ -9,10 +9,22 @@ import 'package:race_gametool/models/port.dart';
 
 Uint8List _draft() {
   final draft = img.Image(width: 160, height: 160, numChannels: 4);
-  img.fillRect(draft,
-      x1: 0, y1: 0, x2: 79, y2: 31, color: img.ColorRgba8(255, 0, 0, 255));
-  img.fillRect(draft,
-      x1: 96, y1: 48, x2: 143, y2: 143, color: img.ColorRgba8(0, 0, 255, 255));
+  img.fillRect(
+    draft,
+    x1: 0,
+    y1: 0,
+    x2: 79,
+    y2: 31,
+    color: img.ColorRgba8(255, 0, 0, 255),
+  );
+  img.fillRect(
+    draft,
+    x1: 96,
+    y1: 48,
+    x2: 143,
+    y2: 143,
+    color: img.ColorRgba8(0, 0, 255, 255),
+  );
   return Uint8List.fromList(img.encodePng(draft));
 }
 
@@ -26,11 +38,12 @@ void main() {
       heightCells: 2,
       ports: [
         Port(
-            localGridX: 0,
-            localGridY: 0,
-            direction: PortDirection.up,
-            span: 5,
-            bidirectional: true),
+          localGridX: 0,
+          localGridY: 0,
+          direction: PortDirection.up,
+          span: 5,
+          bidirectional: true,
+        ),
       ],
     ),
     MaskDraft.fromCells(
@@ -88,6 +101,25 @@ void main() {
     expect(assets.spriteDictJson, contains('spriteSheet'));
   });
 
+  test('embedded pixel projects round trip as optional source data', () {
+    final project = Uint8List.fromList([1, 3, 3, 7]);
+    final bundle = writeAssetBundle(
+      sources: [
+        BundleSource(
+          category: BlockCategory.track,
+          name: 'draft.png',
+          imageBytes: _draft(),
+          masks: masks,
+          pixelProjectBytes: project,
+        ),
+      ],
+      imageName: 'draft.png',
+    );
+
+    final data = readAssetBundle(bundle);
+    expect(data.categoryPixelProjects[BlockCategory.track], project);
+  });
+
   test('multiple decoration images round trip as separate sources but one '
       'merged dictionary', () {
     // Two distinct decoration draft images, each carrying its own block.
@@ -99,6 +131,7 @@ void main() {
 
     final decoA = solid(10, 20, 30);
     final decoB = solid(200, 100, 50);
+    final projectB = Uint8List.fromList([9, 8, 7]);
     const maskA = MaskDraft(
       id: 'deco_a',
       gridX: 0,
@@ -129,6 +162,7 @@ void main() {
           name: 'deco_b.png',
           imageBytes: decoB,
           masks: const [maskB],
+          pixelProjectBytes: projectB,
         ),
       ],
       imageName: 'deco_a.png',
@@ -145,6 +179,7 @@ void main() {
     expect(data.decorationSources[1].name, 'deco_b.png');
     expect(data.decorationSources[1].imageBytes, decoB);
     expect(data.decorationSources[1].masks.single.id, 'deco_b');
+    expect(data.decorationSources[1].pixelProjectBytes, projectB);
 
     // But both blocks merge into the single sprite dictionary.
     final ids = data.blocks.map((b) => b.id).toSet();
@@ -152,7 +187,9 @@ void main() {
   });
 
   test('reading a bundle missing entries throws FormatException', () {
-    expect(() => readAssetBundle(Uint8List.fromList([1, 2, 3])),
-        throwsA(anything));
+    expect(
+      () => readAssetBundle(Uint8List.fromList([1, 2, 3])),
+      throwsA(anything),
+    );
   });
 }

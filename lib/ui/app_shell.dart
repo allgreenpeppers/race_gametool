@@ -11,8 +11,10 @@ import '../state/app_providers.dart';
 import '../state/asset_definer_providers.dart';
 import '../state/file_open_service.dart';
 import '../state/level_editor_providers.dart';
+import '../state/pixel_editor_providers.dart';
 import 'phase1/asset_definer_page.dart';
 import 'phase2/level_editor_page.dart';
+import 'pixel_editor/pixel_editor_page.dart';
 
 /// Main shell: a NavigationRail switching between the two tool phases.
 /// The active mode lives in Riverpod so any part of the app can switch modes.
@@ -24,7 +26,8 @@ class AppShell extends ConsumerStatefulWidget {
   ConsumerState<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends ConsumerState<AppShell> with WindowListener, WidgetsBindingObserver {
+class _AppShellState extends ConsumerState<AppShell>
+    with WindowListener, WidgetsBindingObserver {
   bool _isMaximized = false;
 
   /// A close/quit gesture on macOS fires both the window_manager close hook
@@ -45,6 +48,11 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
           .read(fileOpenServiceProvider)
           .start(
             onOpenRequest: () async {
+              if (!await _closeEmbeddedPixelTabs(
+                'opening the new asset config',
+              )) {
+                return false;
+              }
               final assetState = ref.read(assetDefinerProvider);
               final assetNotifier = ref.read(assetDefinerProvider.notifier);
 
@@ -54,6 +62,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
                   content:
                       'Your asset config has unsaved changes. Do you want to save before opening the new config?',
                   onSave: () => assetNotifier.save(),
+                  isDirty: () => ref.read(assetDefinerProvider).isDirty,
                 );
                 if (!proceed) {
                   return false;
@@ -63,12 +72,15 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
               for (final id in ref.read(workspaceProvider).levelTabs) {
                 final levelState = ref.read(levelEditorProvider(id));
                 if (!levelState.isDirty) continue;
-                final levelNotifier = ref.read(levelEditorProvider(id).notifier);
+                final levelNotifier = ref.read(
+                  levelEditorProvider(id).notifier,
+                );
                 final proceed = await _promptUnsavedChanges(
                   title: 'Save Game Map Changes?',
                   content:
                       'The level "${levelState.mapName}" has unsaved changes. Do you want to save before opening the new config?',
                   onSave: () => levelNotifier.save(),
+                  isDirty: () => ref.read(levelEditorProvider(id)).isDirty,
                 );
                 if (!proceed) {
                   return false;
@@ -111,14 +123,29 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
   }
 
   Future<bool> _promptUnsavedChangesForAll() async {
+    for (final id in ref.read(workspaceProvider).pixelTabs) {
+      final pixelState = ref.read(pixelEditorProvider(id));
+      if (!pixelState.isDirty) continue;
+      final proceed = await _promptUnsavedChanges(
+        title: 'Save Pixel Art Changes?',
+        content:
+            'The pixel project "${pixelState.displayName}" has unsaved changes. Do you want to save before quitting?',
+        onSave: () => ref.read(pixelEditorProvider(id).notifier).save(),
+        isDirty: () => ref.read(pixelEditorProvider(id)).isDirty,
+      );
+      if (!proceed) return false;
+    }
+
     final assetState = ref.read(assetDefinerProvider);
     final assetNotifier = ref.read(assetDefinerProvider.notifier);
 
     if (assetState.isDirty) {
       final proceed = await _promptUnsavedChanges(
         title: 'Save Config Changes?',
-        content: 'Your asset config has unsaved changes. Do you want to save before quitting?',
+        content:
+            'Your asset config has unsaved changes. Do you want to save before quitting?',
         onSave: () => assetNotifier.save(),
+        isDirty: () => ref.read(assetDefinerProvider).isDirty,
       );
       if (!proceed) {
         return false;
@@ -134,6 +161,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
         content:
             'The level "${levelState.mapName}" has unsaved changes. Do you want to save before quitting?',
         onSave: () => levelNotifier.save(),
+        isDirty: () => ref.read(levelEditorProvider(id)).isDirty,
       );
       if (!proceed) {
         return false;
@@ -161,6 +189,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
     required String title,
     required String content,
     required Future<void> Function() onSave,
+    required bool Function() isDirty,
   }) async {
     final result = await showDialog<String>(
       context: context,
@@ -176,32 +205,61 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
             onPressed: () => Navigator.pop(context, 'discard'),
             child: const Text('Discard'),
           ),
-          FilledButton(onPressed: () => Navigator.pop(context, 'save'), child: const Text('Save')),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, 'save'),
+            child: const Text('Save'),
+          ),
         ],
       ),
     );
     if (result == 'save') {
       await onSave();
-      return true;
+      return !isDirty();
     }
     return result == 'discard';
   }
 
+  Future<bool> _closeEmbeddedPixelTabs(String action) async {
+    final ids = [...ref.read(workspaceProvider).pixelTabs];
+    for (final id in ids) {
+      final pixelState = ref.read(pixelEditorProvider(id));
+      if (pixelState.assetTarget == null) continue;
+      if (pixelState.isDirty) {
+        final proceed = await _promptUnsavedChanges(
+          title: 'Save Embedded Pixel Changes?',
+          content:
+              'The embedded pixel project "${pixelState.displayName}" has unsaved changes. Save it before $action?',
+          onSave: () => ref.read(pixelEditorProvider(id).notifier).save(),
+          isDirty: () => ref.read(pixelEditorProvider(id)).isDirty,
+        );
+        if (!proceed) return false;
+      }
+      ref.read(workspaceProvider.notifier).closePixelTab(id);
+      ref.invalidate(pixelEditorProvider(id));
+    }
+    return true;
+  }
+
   /// The active level tab id, or null when the pinned Phase 1 tab is active.
   int? get _activeLevelTab => ref.read(workspaceProvider).activeLevelTab;
+  int? get _activePixelTab => ref.read(workspaceProvider).activePixelTab;
 
-  /// Whether a new Phase 2 tab may be opened yet. Level editing needs an asset
-  /// set, which Phase 1 establishes (by saving a config or opening one), so the
-  /// pinned Phase 1 tab must have produced assets first.
+  /// Whether a new level tab may be opened yet. Level editing needs an asset
+  /// set produced by the Asset Definer.
   bool get _canOpenLevelTab => ref.read(assetLibraryProvider).isNotEmpty;
 
   void _notifyAssetsFirst() {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Load or define assets in Phase 1 before opening a level.')),
+      const SnackBar(
+        content: Text(
+          'Load or define assets in Asset Definer before opening a level.',
+        ),
+      ),
     );
   }
 
   Future<void> _handleNewConfig(WidgetRef ref) async {
+    if (!await _closeEmbeddedPixelTabs('creating a new asset config')) return;
     final assetState = ref.read(assetDefinerProvider);
     final assetNotifier = ref.read(assetDefinerProvider.notifier);
 
@@ -211,6 +269,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
         content:
             'Your asset config has unsaved changes. Do you want to save before creating a new config?',
         onSave: () => assetNotifier.save(),
+        isDirty: () => ref.read(assetDefinerProvider).isDirty,
       );
       if (!proceed) return;
     }
@@ -226,6 +285,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
         content:
             'The level "${levelState.mapName}" has unsaved changes. Do you want to save before creating a new config?',
         onSave: () => levelNotifier.save(),
+        isDirty: () => ref.read(levelEditorProvider(id)).isDirty,
       );
       if (!proceed) return;
       if (!mounted) return;
@@ -236,8 +296,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
     ref.read(workspaceProvider.notifier).closeAllLevelTabs();
   }
 
-  /// Opens a fresh Phase 2 tab. New tabs start empty, so there is nothing to
-  /// discard and no save prompt.
+  /// Opens a fresh level tab. New tabs start empty.
   void _handleNewGameMap(WidgetRef ref) {
     if (!_canOpenLevelTab) {
       _notifyAssetsFirst();
@@ -247,6 +306,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
   }
 
   Future<void> _handleOpenConfig(WidgetRef ref) async {
+    if (!await _closeEmbeddedPixelTabs('opening another asset config')) return;
     final assetState = ref.read(assetDefinerProvider);
     final assetNotifier = ref.read(assetDefinerProvider.notifier);
 
@@ -256,6 +316,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
         content:
             'Your asset config has unsaved changes. Do you want to save before opening another config?',
         onSave: () => assetNotifier.save(),
+        isDirty: () => ref.read(assetDefinerProvider).isDirty,
       );
       if (!proceed) return;
     }
@@ -265,7 +326,79 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
     await assetNotifier.openBundle();
   }
 
-  /// Opens a saved level into a new Phase 2 tab.
+  Future<void> _handleNewPixelProject(WidgetRef ref) async {
+    final activeId = ref.read(workspaceProvider).activePixelTab;
+    final active = activeId == null
+        ? null
+        : ref.read(pixelEditorProvider(activeId));
+    final size = await PixelEditorPage.promptCanvasSize(
+      context,
+      title: 'New Pixel Canvas',
+      initialWidth: active?.document.width ?? 128,
+      initialHeight: active?.document.height ?? 128,
+    );
+    if (size == null || !mounted) return;
+    final id = ref.read(workspaceProvider.notifier).openPixelTab();
+    ref.read(pixelEditorProvider(id).notifier).newDocument(size.$1, size.$2);
+  }
+
+  Future<void> _handleOpenPixelProject(WidgetRef ref) async {
+    final id = ref.read(workspaceProvider.notifier).openPixelTab();
+    final opened = await ref.read(pixelEditorProvider(id).notifier).openFile();
+    if (!opened) {
+      ref.read(workspaceProvider.notifier).closePixelTab(id);
+      ref.invalidate(pixelEditorProvider(id));
+    }
+  }
+
+  Future<void> _handleImportPixelImage(WidgetRef ref) async {
+    final id = ref.read(workspaceProvider.notifier).openPixelTab();
+    final imported = await ref
+        .read(pixelEditorProvider(id).notifier)
+        .importImageFile();
+    if (!imported) {
+      ref.read(workspaceProvider.notifier).closePixelTab(id);
+      ref.invalidate(pixelEditorProvider(id));
+    }
+  }
+
+  void _handleEditAssetInPixelEditor(WidgetRef ref) {
+    final assetState = ref.read(assetDefinerProvider);
+    final image = assetState.activeImage;
+    if (image == null) return;
+    final target = AssetPixelTarget(
+      category: assetState.activeCategory,
+      decorationIndex: assetState.activeCategory == BlockCategory.decoration
+          ? assetState.activeDecorationIndex
+          : null,
+    );
+    final workspace = ref.read(workspaceProvider);
+    for (final existingId in workspace.pixelTabs) {
+      final existing = ref.read(pixelEditorProvider(existingId));
+      if (existing.assetTarget == target) {
+        ref.read(workspaceProvider.notifier).activatePixelTab(existingId);
+        return;
+      }
+    }
+    final id = ref.read(workspaceProvider.notifier).openPixelTab();
+    final error = ref
+        .read(pixelEditorProvider(id).notifier)
+        .loadAssetSource(
+          imageBytes: image.bytes,
+          name: image.name,
+          target: target,
+          pixelProjectBytes: image.pixelProjectBytes,
+        );
+    if (error != null) {
+      ref.read(workspaceProvider.notifier).closePixelTab(id);
+      ref.invalidate(pixelEditorProvider(id));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error)));
+    }
+  }
+
+  /// Opens a saved level into a new tab.
   Future<void> _handleOpenGameLevel(WidgetRef ref) async {
     if (!_canOpenLevelTab) {
       _notifyAssetsFirst();
@@ -276,28 +409,59 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
   }
 
   void _handleSave(WidgetRef ref) {
-    final id = _activeLevelTab;
-    if (id == null) {
-      ref.read(assetDefinerProvider.notifier).save();
+    final levelId = _activeLevelTab;
+    final pixelId = _activePixelTab;
+    if (levelId != null) {
+      ref.read(levelEditorProvider(levelId).notifier).save();
+    } else if (pixelId != null) {
+      ref.read(pixelEditorProvider(pixelId).notifier).save();
     } else {
-      ref.read(levelEditorProvider(id).notifier).save();
+      ref.read(assetDefinerProvider.notifier).save();
     }
   }
 
   void _handleSaveAs(WidgetRef ref) {
-    final id = _activeLevelTab;
-    if (id == null) {
-      ref.read(assetDefinerProvider.notifier).saveAs();
+    final levelId = _activeLevelTab;
+    final pixelId = _activePixelTab;
+    if (levelId != null) {
+      ref.read(levelEditorProvider(levelId).notifier).saveAs();
+    } else if (pixelId != null) {
+      ref.read(pixelEditorProvider(pixelId).notifier).saveAs();
     } else {
-      ref.read(levelEditorProvider(id).notifier).saveAs();
+      ref.read(assetDefinerProvider.notifier).saveAs();
+    }
+  }
+
+  void _handleExportPixelPng(WidgetRef ref) {
+    final id = _activePixelTab;
+    if (id != null) {
+      ref.read(pixelEditorProvider(id).notifier).exportPng();
     }
   }
 
   void _handleUndo(WidgetRef ref) {
-    final id = _activeLevelTab;
-    if (id != null) {
-      ref.read(levelEditorProvider(id).notifier).undo();
+    final levelId = _activeLevelTab;
+    final pixelId = _activePixelTab;
+    if (levelId != null) {
+      ref.read(levelEditorProvider(levelId).notifier).undo();
+    } else if (pixelId != null) {
+      ref.read(pixelEditorProvider(pixelId).notifier).undo();
     }
+  }
+
+  void _handlePixelCopy(WidgetRef ref) {
+    final id = _activePixelTab;
+    if (id != null) ref.read(pixelEditorProvider(id).notifier).copySelection();
+  }
+
+  void _handlePixelCut(WidgetRef ref) {
+    final id = _activePixelTab;
+    if (id != null) ref.read(pixelEditorProvider(id).notifier).cutSelection();
+  }
+
+  void _handlePixelPaste(WidgetRef ref) {
+    final id = _activePixelTab;
+    if (id != null) ref.read(pixelEditorProvider(id).notifier).pasteSelection();
   }
 
   /// Prompts to save a dirty level tab, then closes it. Returns without closing
@@ -310,10 +474,27 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
         content:
             'The level "${levelState.mapName}" has unsaved changes. Do you want to save before closing this tab?',
         onSave: () => ref.read(levelEditorProvider(id).notifier).save(),
+        isDirty: () => ref.read(levelEditorProvider(id)).isDirty,
       );
       if (!proceed) return;
     }
     ref.read(workspaceProvider.notifier).closeLevelTab(id);
+  }
+
+  Future<void> _handleClosePixelTab(int id) async {
+    final pixelState = ref.read(pixelEditorProvider(id));
+    if (pixelState.isDirty) {
+      final proceed = await _promptUnsavedChanges(
+        title: 'Save Pixel Art Changes?',
+        content:
+            'The pixel project "${pixelState.displayName}" has unsaved changes. Do you want to save before closing this tab?',
+        onSave: () => ref.read(pixelEditorProvider(id).notifier).save(),
+        isDirty: () => ref.read(pixelEditorProvider(id)).isDirty,
+      );
+      if (!proceed) return;
+    }
+    ref.read(workspaceProvider.notifier).closePixelTab(id);
+    ref.invalidate(pixelEditorProvider(id));
   }
 
   Future<void> _handleClearLayer(WidgetRef ref) async {
@@ -332,8 +513,14 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
           'Are you sure you want to clear all placements on the ${activeLayer.label} layer? This cannot be undone.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Clear')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Clear'),
+          ),
         ],
       ),
     );
@@ -357,7 +544,10 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
             'This will discard your manual island edits and regenerate from the track footprint. Continue?',
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
               child: const Text('Continue'),
@@ -379,7 +569,9 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
     required IconData icon,
   }) {
     final theme = Theme.of(context);
-    final color = selected ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant;
+    final color = selected
+        ? theme.colorScheme.primary
+        : theme.colorScheme.onSurfaceVariant;
     return InkWell(
       onTap: onPressed,
       borderRadius: BorderRadius.circular(8),
@@ -392,7 +584,9 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
               : Colors.transparent,
           borderRadius: BorderRadius.circular(8),
           border: selected
-              ? Border.all(color: theme.colorScheme.primary.withValues(alpha: 0.5))
+              ? Border.all(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.5),
+                )
               : null,
         ),
         child: Column(
@@ -403,7 +597,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
             Text(
               label,
               textAlign: TextAlign.center,
-              maxLines: 1,
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: color,
@@ -418,6 +612,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
   }
 
   Widget _buildMenuBar(BuildContext context, WidgetRef ref) {
+    final pixelMode = ref.read(workspaceProvider).mode == AppMode.pixelEditor;
     return SizedBox(
       height: 32,
       child: MenuBar(
@@ -428,38 +623,74 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
         children: [
           SubmenuButton(
             menuChildren: [
-              MenuItemButton(
-                shortcut: const SingleActivator(
-                  LogicalKeyboardKey.keyN,
-                  control: true,
-                  shift: true,
+              if (pixelMode) ...[
+                MenuItemButton(
+                  shortcut: const SingleActivator(
+                    LogicalKeyboardKey.keyN,
+                    control: true,
+                  ),
+                  onPressed: () => _handleNewPixelProject(ref),
+                  child: const Text('New Pixel Project...'),
                 ),
-                onPressed: () => _handleNewConfig(ref),
-                child: const Text('New Config'),
-              ),
-              MenuItemButton(
-                shortcut: const SingleActivator(LogicalKeyboardKey.keyN, control: true),
-                onPressed: () => _handleNewGameMap(ref),
-                child: const Text('New Game Map'),
-              ),
+                MenuItemButton(
+                  shortcut: const SingleActivator(
+                    LogicalKeyboardKey.keyO,
+                    control: true,
+                  ),
+                  onPressed: () => _handleOpenPixelProject(ref),
+                  child: const Text('Open Pixel Project...'),
+                ),
+                MenuItemButton(
+                  onPressed: () => _handleImportPixelImage(ref),
+                  child: const Text('Import Image...'),
+                ),
+                MenuItemButton(
+                  onPressed: () => _handleExportPixelPng(ref),
+                  child: const Text('Export PNG...'),
+                ),
+              ] else ...[
+                MenuItemButton(
+                  shortcut: const SingleActivator(
+                    LogicalKeyboardKey.keyN,
+                    control: true,
+                    shift: true,
+                  ),
+                  onPressed: () => _handleNewConfig(ref),
+                  child: const Text('New Config'),
+                ),
+                MenuItemButton(
+                  shortcut: const SingleActivator(
+                    LogicalKeyboardKey.keyN,
+                    control: true,
+                  ),
+                  onPressed: () => _handleNewGameMap(ref),
+                  child: const Text('New Game Map'),
+                ),
+                const PopupMenuDivider(),
+                MenuItemButton(
+                  shortcut: const SingleActivator(
+                    LogicalKeyboardKey.keyO,
+                    control: true,
+                    shift: true,
+                  ),
+                  onPressed: () => _handleOpenConfig(ref),
+                  child: const Text('Open Config...'),
+                ),
+                MenuItemButton(
+                  shortcut: const SingleActivator(
+                    LogicalKeyboardKey.keyO,
+                    control: true,
+                  ),
+                  onPressed: () => _handleOpenGameLevel(ref),
+                  child: const Text('Open Game Level...'),
+                ),
+              ],
               const PopupMenuDivider(),
               MenuItemButton(
                 shortcut: const SingleActivator(
-                  LogicalKeyboardKey.keyO,
+                  LogicalKeyboardKey.keyS,
                   control: true,
-                  shift: true,
                 ),
-                onPressed: () => _handleOpenConfig(ref),
-                child: const Text('Open Config...'),
-              ),
-              MenuItemButton(
-                shortcut: const SingleActivator(LogicalKeyboardKey.keyO, control: true),
-                onPressed: () => _handleOpenGameLevel(ref),
-                child: const Text('Open Game Level...'),
-              ),
-              const PopupMenuDivider(),
-              MenuItemButton(
-                shortcut: const SingleActivator(LogicalKeyboardKey.keyS, control: true),
                 onPressed: () => _handleSave(ref),
                 child: const Text('Save'),
               ),
@@ -478,16 +709,51 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
           SubmenuButton(
             menuChildren: [
               MenuItemButton(
-                shortcut: const SingleActivator(LogicalKeyboardKey.keyZ, control: true),
+                shortcut: const SingleActivator(
+                  LogicalKeyboardKey.keyZ,
+                  control: true,
+                ),
                 onPressed: () => _handleUndo(ref),
                 child: const Text('Undo'),
               ),
-              const PopupMenuDivider(),
-              MenuItemButton(
-                shortcut: const SingleActivator(LogicalKeyboardKey.delete, control: true),
-                onPressed: () => _handleClearLayer(ref),
-                child: const Text('Clear Active Layer'),
-              ),
+              if (pixelMode) ...[
+                const PopupMenuDivider(),
+                MenuItemButton(
+                  shortcut: const SingleActivator(
+                    LogicalKeyboardKey.keyC,
+                    control: true,
+                  ),
+                  onPressed: () => _handlePixelCopy(ref),
+                  child: const Text('Copy'),
+                ),
+                MenuItemButton(
+                  shortcut: const SingleActivator(
+                    LogicalKeyboardKey.keyX,
+                    control: true,
+                  ),
+                  onPressed: () => _handlePixelCut(ref),
+                  child: const Text('Cut'),
+                ),
+                MenuItemButton(
+                  shortcut: const SingleActivator(
+                    LogicalKeyboardKey.keyV,
+                    control: true,
+                  ),
+                  onPressed: () => _handlePixelPaste(ref),
+                  child: const Text('Paste'),
+                ),
+              ],
+              if (ref.read(workspaceProvider).activeLevelTab != null) ...[
+                const PopupMenuDivider(),
+                MenuItemButton(
+                  shortcut: const SingleActivator(
+                    LogicalKeyboardKey.delete,
+                    control: true,
+                  ),
+                  onPressed: () => _handleClearLayer(ref),
+                  child: const Text('Clear Active Layer'),
+                ),
+              ],
             ],
             child: const Text('Edit'),
           ),
@@ -497,6 +763,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
   }
 
   Widget _buildRootShell(BuildContext context, Widget child) {
+    final pixelMode = ref.read(workspaceProvider).mode == AppMode.pixelEditor;
     if (defaultTargetPlatform == TargetPlatform.macOS) {
       return PlatformMenuBar(
         menus: [
@@ -505,8 +772,12 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
             menus: [
               PlatformMenuItemGroup(
                 members: [
-                  PlatformProvidedMenuItem(type: PlatformProvidedMenuItemType.about),
-                  PlatformProvidedMenuItem(type: PlatformProvidedMenuItemType.quit),
+                  PlatformProvidedMenuItem(
+                    type: PlatformProvidedMenuItemType.about,
+                  ),
+                  PlatformProvidedMenuItem(
+                    type: PlatformProvidedMenuItemType.quit,
+                  ),
                 ],
               ),
             ],
@@ -516,45 +787,84 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
             menus: [
               PlatformMenuItemGroup(
                 members: [
-                  PlatformMenuItem(
-                    label: 'New Config',
-                    shortcut: const SingleActivator(
-                      LogicalKeyboardKey.keyN,
-                      meta: true,
-                      shift: true,
+                  if (pixelMode)
+                    PlatformMenuItem(
+                      label: 'New Pixel Project...',
+                      shortcut: const SingleActivator(
+                        LogicalKeyboardKey.keyN,
+                        meta: true,
+                      ),
+                      onSelected: () => _handleNewPixelProject(ref),
+                    )
+                  else ...[
+                    PlatformMenuItem(
+                      label: 'New Config',
+                      shortcut: const SingleActivator(
+                        LogicalKeyboardKey.keyN,
+                        meta: true,
+                        shift: true,
+                      ),
+                      onSelected: () => _handleNewConfig(ref),
                     ),
-                    onSelected: () => _handleNewConfig(ref),
-                  ),
-                  PlatformMenuItem(
-                    label: 'New Game Map',
-                    shortcut: const SingleActivator(LogicalKeyboardKey.keyN, meta: true),
-                    onSelected: () => _handleNewGameMap(ref),
-                  ),
+                    PlatformMenuItem(
+                      label: 'New Game Map',
+                      shortcut: const SingleActivator(
+                        LogicalKeyboardKey.keyN,
+                        meta: true,
+                      ),
+                      onSelected: () => _handleNewGameMap(ref),
+                    ),
+                  ],
                 ],
               ),
               PlatformMenuItemGroup(
                 members: [
-                  PlatformMenuItem(
-                    label: 'Open Config...',
-                    shortcut: const SingleActivator(
-                      LogicalKeyboardKey.keyO,
-                      meta: true,
-                      shift: true,
+                  if (pixelMode) ...[
+                    PlatformMenuItem(
+                      label: 'Open Pixel Project...',
+                      shortcut: const SingleActivator(
+                        LogicalKeyboardKey.keyO,
+                        meta: true,
+                      ),
+                      onSelected: () => _handleOpenPixelProject(ref),
                     ),
-                    onSelected: () => _handleOpenConfig(ref),
-                  ),
-                  PlatformMenuItem(
-                    label: 'Open Game Level...',
-                    shortcut: const SingleActivator(LogicalKeyboardKey.keyO, meta: true),
-                    onSelected: () => _handleOpenGameLevel(ref),
-                  ),
+                    PlatformMenuItem(
+                      label: 'Import Image...',
+                      onSelected: () => _handleImportPixelImage(ref),
+                    ),
+                    PlatformMenuItem(
+                      label: 'Export PNG...',
+                      onSelected: () => _handleExportPixelPng(ref),
+                    ),
+                  ] else ...[
+                    PlatformMenuItem(
+                      label: 'Open Config...',
+                      shortcut: const SingleActivator(
+                        LogicalKeyboardKey.keyO,
+                        meta: true,
+                        shift: true,
+                      ),
+                      onSelected: () => _handleOpenConfig(ref),
+                    ),
+                    PlatformMenuItem(
+                      label: 'Open Game Level...',
+                      shortcut: const SingleActivator(
+                        LogicalKeyboardKey.keyO,
+                        meta: true,
+                      ),
+                      onSelected: () => _handleOpenGameLevel(ref),
+                    ),
+                  ],
                 ],
               ),
               PlatformMenuItemGroup(
                 members: [
                   PlatformMenuItem(
                     label: 'Save',
-                    shortcut: const SingleActivator(LogicalKeyboardKey.keyS, meta: true),
+                    shortcut: const SingleActivator(
+                      LogicalKeyboardKey.keyS,
+                      meta: true,
+                    ),
                     onSelected: () => _handleSave(ref),
                   ),
                   PlatformMenuItem(
@@ -577,20 +887,56 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
                 members: [
                   PlatformMenuItem(
                     label: 'Undo',
-                    shortcut: const SingleActivator(LogicalKeyboardKey.keyZ, meta: true),
+                    shortcut: const SingleActivator(
+                      LogicalKeyboardKey.keyZ,
+                      meta: true,
+                    ),
                     onSelected: () => _handleUndo(ref),
                   ),
                 ],
               ),
-              PlatformMenuItemGroup(
-                members: [
-                  PlatformMenuItem(
-                    label: 'Clear Active Layer',
-                    shortcut: const SingleActivator(LogicalKeyboardKey.delete, meta: true),
-                    onSelected: () => _handleClearLayer(ref),
-                  ),
-                ],
-              ),
+              if (pixelMode)
+                PlatformMenuItemGroup(
+                  members: [
+                    PlatformMenuItem(
+                      label: 'Copy',
+                      shortcut: const SingleActivator(
+                        LogicalKeyboardKey.keyC,
+                        meta: true,
+                      ),
+                      onSelected: () => _handlePixelCopy(ref),
+                    ),
+                    PlatformMenuItem(
+                      label: 'Cut',
+                      shortcut: const SingleActivator(
+                        LogicalKeyboardKey.keyX,
+                        meta: true,
+                      ),
+                      onSelected: () => _handlePixelCut(ref),
+                    ),
+                    PlatformMenuItem(
+                      label: 'Paste',
+                      shortcut: const SingleActivator(
+                        LogicalKeyboardKey.keyV,
+                        meta: true,
+                      ),
+                      onSelected: () => _handlePixelPaste(ref),
+                    ),
+                  ],
+                ),
+              if (ref.read(workspaceProvider).activeLevelTab != null)
+                PlatformMenuItemGroup(
+                  members: [
+                    PlatformMenuItem(
+                      label: 'Clear Active Layer',
+                      shortcut: const SingleActivator(
+                        LogicalKeyboardKey.delete,
+                        meta: true,
+                      ),
+                      onSelected: () => _handleClearLayer(ref),
+                    ),
+                  ],
+                ),
             ],
           ),
         ],
@@ -606,16 +952,37 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
     final workspace = ref.watch(workspaceProvider);
     final mode = workspace.mode;
     final activeId = workspace.activeLevelTab;
-    final hasAssets = ref.watch(assetLibraryProvider.select((l) => l.isNotEmpty));
+    final activePixelId = workspace.activePixelTab;
+    final hasAssets = ref.watch(
+      assetLibraryProvider.select((l) => l.isNotEmpty),
+    );
 
     // Watch specific provider states to render in the unified top toolbar.
     // This avoids rebuilding the AppShell (and triggering macOS native menubar rebuilds) on every mouse hover/movement.
-    final activeCategory = ref.watch(assetDefinerProvider.select((s) => s.activeCategory));
+    final activeCategory = ref.watch(
+      assetDefinerProvider.select((s) => s.activeCategory),
+    );
     final assetTool = ref.watch(assetDefinerProvider.select((s) => s.tool));
-    final hasActiveImage = ref.watch(assetDefinerProvider.select((s) => s.activeImage != null));
-    final assetStatusMessage = ref.watch(assetDefinerProvider.select((s) => s.statusMessage));
-    final physicsStatusMessage =
-        ref.watch(assetDefinerProvider.select((s) => s.physicsStatusMessage));
+    final hasActiveImage = ref.watch(
+      assetDefinerProvider.select((s) => s.activeImage != null),
+    );
+    final assetStatusMessage = ref.watch(
+      assetDefinerProvider.select((s) => s.statusMessage),
+    );
+    final pixelStatusMessage = activePixelId == null
+        ? null
+        : ref.watch(
+            pixelEditorProvider(activePixelId).select((s) => s.statusMessage),
+          );
+    final pixelTool = activePixelId == null
+        ? PixelTool.pencil
+        : ref.watch(pixelEditorProvider(activePixelId).select((s) => s.tool));
+    final pixelNotifier = activePixelId == null
+        ? null
+        : ref.read(pixelEditorProvider(activePixelId).notifier);
+    final physicsStatusMessage = ref.watch(
+      assetDefinerProvider.select((s) => s.physicsStatusMessage),
+    );
     final assetNotifier = ref.read(assetDefinerProvider.notifier);
 
     // Level toolbar/status state is scoped to the active tab; the fallbacks
@@ -631,59 +998,112 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
         : ref.watch(levelEditorProvider(activeId).select((s) => s.tool));
     final islandBrushRadius = activeId == null
         ? 0
-        : ref.watch(levelEditorProvider(activeId).select((s) => s.islandBrushRadius));
+        : ref.watch(
+            levelEditorProvider(activeId).select((s) => s.islandBrushRadius),
+          );
     final levelStatusMessage = activeId == null
         ? null
-        : ref.watch(levelEditorProvider(activeId).select((s) => s.statusMessage));
+        : ref.watch(
+            levelEditorProvider(activeId).select((s) => s.statusMessage),
+          );
     final placementsLength = activeId == null
         ? 0
-        : ref.watch(levelEditorProvider(activeId).select((s) => s.placements.length));
+        : ref.watch(
+            levelEditorProvider(activeId).select((s) => s.placements.length),
+          );
     final hasSpawn = activeId == null
         ? false
-        : ref.watch(levelEditorProvider(activeId).select((s) => s.spawn != null));
+        : ref.watch(
+            levelEditorProvider(activeId).select((s) => s.spawn != null),
+          );
 
     final mainContent = CallbackShortcuts(
       bindings: {
-        const SingleActivator(LogicalKeyboardKey.keyZ, control: true): () => levelNotifier?.undo(),
-        const SingleActivator(LogicalKeyboardKey.keyZ, meta: true): () => levelNotifier?.undo(),
+        const SingleActivator(LogicalKeyboardKey.keyZ, control: true): () =>
+            _handleUndo(ref),
+        const SingleActivator(LogicalKeyboardKey.keyZ, meta: true): () =>
+            _handleUndo(ref),
         const SingleActivator(LogicalKeyboardKey.keyW, control: true): () {
-          if (activeId != null) _handleCloseTab(activeId);
+          if (activeId != null) {
+            _handleCloseTab(activeId);
+          } else if (activePixelId != null) {
+            _handleClosePixelTab(activePixelId);
+          }
         },
         const SingleActivator(LogicalKeyboardKey.keyW, meta: true): () {
-          if (activeId != null) _handleCloseTab(activeId);
+          if (activeId != null) {
+            _handleCloseTab(activeId);
+          } else if (activePixelId != null) {
+            _handleClosePixelTab(activePixelId);
+          }
         },
         if (defaultTargetPlatform != TargetPlatform.macOS) ...{
           // New Config: Ctrl+Shift+N / Cmd+Shift+N
-          const SingleActivator(LogicalKeyboardKey.keyN, control: true, shift: true): () =>
+          const SingleActivator(
+            LogicalKeyboardKey.keyN,
+            control: true,
+            shift: true,
+          ): () =>
               _handleNewConfig(ref),
-          const SingleActivator(LogicalKeyboardKey.keyN, meta: true, shift: true): () =>
+          const SingleActivator(
+            LogicalKeyboardKey.keyN,
+            meta: true,
+            shift: true,
+          ): () =>
               _handleNewConfig(ref),
 
-          // New Game Map: Ctrl+N / Cmd+N
+          // Contextual document creation.
           const SingleActivator(LogicalKeyboardKey.keyN, control: true): () =>
-              _handleNewGameMap(ref),
-          const SingleActivator(LogicalKeyboardKey.keyN, meta: true): () => _handleNewGameMap(ref),
+              mode == AppMode.pixelEditor
+              ? _handleNewPixelProject(ref)
+              : _handleNewGameMap(ref),
+          const SingleActivator(LogicalKeyboardKey.keyN, meta: true): () =>
+              mode == AppMode.pixelEditor
+              ? _handleNewPixelProject(ref)
+              : _handleNewGameMap(ref),
 
           // Open Config: Ctrl+Shift+O / Cmd+Shift+O
-          const SingleActivator(LogicalKeyboardKey.keyO, control: true, shift: true): () =>
+          const SingleActivator(
+            LogicalKeyboardKey.keyO,
+            control: true,
+            shift: true,
+          ): () =>
               _handleOpenConfig(ref),
-          const SingleActivator(LogicalKeyboardKey.keyO, meta: true, shift: true): () =>
+          const SingleActivator(
+            LogicalKeyboardKey.keyO,
+            meta: true,
+            shift: true,
+          ): () =>
               _handleOpenConfig(ref),
 
-          // Open Game Level: Ctrl+O / Cmd+O
+          // Contextual document open.
           const SingleActivator(LogicalKeyboardKey.keyO, control: true): () =>
-              _handleOpenGameLevel(ref),
+              mode == AppMode.pixelEditor
+              ? _handleOpenPixelProject(ref)
+              : _handleOpenGameLevel(ref),
           const SingleActivator(LogicalKeyboardKey.keyO, meta: true): () =>
-              _handleOpenGameLevel(ref),
+              mode == AppMode.pixelEditor
+              ? _handleOpenPixelProject(ref)
+              : _handleOpenGameLevel(ref),
 
           // Save: Ctrl+S / Cmd+S
-          const SingleActivator(LogicalKeyboardKey.keyS, control: true): () => _handleSave(ref),
-          const SingleActivator(LogicalKeyboardKey.keyS, meta: true): () => _handleSave(ref),
+          const SingleActivator(LogicalKeyboardKey.keyS, control: true): () =>
+              _handleSave(ref),
+          const SingleActivator(LogicalKeyboardKey.keyS, meta: true): () =>
+              _handleSave(ref),
 
           // Save As: Ctrl+Shift+S / Cmd+Shift+S
-          const SingleActivator(LogicalKeyboardKey.keyS, control: true, shift: true): () =>
+          const SingleActivator(
+            LogicalKeyboardKey.keyS,
+            control: true,
+            shift: true,
+          ): () =>
               _handleSaveAs(ref),
-          const SingleActivator(LogicalKeyboardKey.keyS, meta: true, shift: true): () =>
+          const SingleActivator(
+            LogicalKeyboardKey.keyS,
+            meta: true,
+            shift: true,
+          ): () =>
               _handleSaveAs(ref),
 
           // Clear Active Layer: Ctrl+Delete / Cmd+Delete
@@ -716,7 +1136,8 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
                                 context,
                                 label: categoryLabel(cat),
                                 selected: activeCategory == cat,
-                                onPressed: () => assetNotifier.setActiveCategory(cat),
+                                onPressed: () =>
+                                    assetNotifier.setActiveCategory(cat),
                                 icon: switch (cat) {
                                   BlockCategory.track => Icons.alt_route,
                                   BlockCategory.islandTile => Icons.landscape,
@@ -750,6 +1171,19 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
                                 },
                               ),
                               const SizedBox(height: 12),
+                            ],
+                          ] else if (mode == AppMode.pixelEditor) ...[
+                            for (final tool in PixelTool.values.where(
+                              (tool) => tool != PixelTool.move,
+                            )) ...[
+                              _buildSidebarItem(
+                                context,
+                                label: tool.label,
+                                selected: pixelTool == tool,
+                                onPressed: () => pixelNotifier!.setTool(tool),
+                                icon: pixelToolIcon(tool),
+                              ),
+                              const SizedBox(height: 8),
                             ],
                           ],
                         ],
@@ -818,15 +1252,45 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
                               // Tabs: pinned Phase 1 + one per open level. Shrinks
                               // when the row runs out of space, leaving a drag area.
                               _Phase1TabChip(
-                                selected: activeId == null,
-                                onSelect: () =>
-                                    ref.read(workspaceProvider.notifier).activatePhase1(),
+                                selected:
+                                    activeId == null &&
+                                    mode != AppMode.pixelEditor,
+                                onSelect: () => ref
+                                    .read(workspaceProvider.notifier)
+                                    .activatePhase1(),
                               ),
                               Flexible(
                                 flex: 10,
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
+                                    for (final id in workspace.pixelTabs)
+                                      Flexible(
+                                        flex: activePixelId == id ? 3 : 1,
+                                        child: _PixelTabChip(
+                                          key: ValueKey('pixel-$id'),
+                                          id: id,
+                                          selected: activePixelId == id,
+                                          onSelect: () => ref
+                                              .read(workspaceProvider.notifier)
+                                              .activatePixelTab(id),
+                                          onClose: () =>
+                                              _handleClosePixelTab(id),
+                                        ),
+                                      ),
+                                    Tooltip(
+                                      message: 'New pixel project',
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(5),
+                                        child: IconButton(
+                                          iconSize: 18,
+                                          visualDensity: VisualDensity.compact,
+                                          icon: const Icon(Icons.draw),
+                                          onPressed: () =>
+                                              _handleNewPixelProject(ref),
+                                        ),
+                                      ),
+                                    ),
                                     for (final id in workspace.levelTabs)
                                       Flexible(
                                         flex: activeId == id ? 3 : 1,
@@ -843,7 +1307,7 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
                                     Tooltip(
                                       message: hasAssets
                                           ? 'New level tab'
-                                          : 'Define or load assets in Phase 1 first',
+                                          : 'Define or load assets first',
                                       child: Padding(
                                         padding: const EdgeInsets.all(5),
                                         child: IconButton(
@@ -861,127 +1325,198 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
                               ),
                               Expanded(
                                 flex: 1,
-                                child: DragToMoveArea(child: Container(color: Colors.transparent)),
+                                child: DragToMoveArea(
+                                  child: Container(color: Colors.transparent),
+                                ),
                               ),
                             ],
                           ),
                         ),
 
-                        // Line 2: Tools and Action buttons (horizontal scrollable row)
-                        Container(
-                          height: 44,
-                          color: theme.colorScheme.surfaceContainerHigh,
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: Row(
-                              children: [
-                                if (mode == AppMode.assetDefiner) ...[
-                                  // Tool SegmentedButton
-                                  SegmentedButton<Phase1Tool>(
-                                    showSelectedIcon: false,
-                                    style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                                    segments: [
-                                      for (final t in Phase1Tool.values)
-                                        if ((activeCategory == BlockCategory.track) ||
-                                            (activeCategory == BlockCategory.islandTile &&
-                                                t != Phase1Tool.paintMask &&
-                                                t != Phase1Tool.addPort &&
-                                                t != Phase1Tool.drawPhysicsArea) ||
-                                            (activeCategory == BlockCategory.decoration &&
-                                                t != Phase1Tool.addPort &&
-                                                t != Phase1Tool.drawPhysicsArea))
-                                          ButtonSegment(
-                                            value: t,
-                                            tooltip: t.label,
-                                            icon: Icon(switch (t) {
-                                              Phase1Tool.select => Icons.near_me_outlined,
-                                              Phase1Tool.move => Icons.open_with,
-                                              Phase1Tool.drawBox => Icons.crop_square,
-                                              Phase1Tool.paintMask => Icons.brush_outlined,
-                                              Phase1Tool.addPort => Icons.adjust,
-                                              Phase1Tool.drawPhysicsArea => Icons.polyline,
-                                            }),
-                                          ),
-                                    ],
-                                    selected: {assetTool},
-                                    onSelectionChanged: (selection) =>
-                                        assetNotifier.setTool(selection.first),
-                                  ),
-                                  const SizedBox(width: 12),
-
-                                  // Action Buttons
-                                  FilledButton.tonalIcon(
-                                    onPressed: assetNotifier.loadImage,
-                                    style: FilledButton.styleFrom(
-                                      visualDensity: VisualDensity.compact,
-                                    ),
-                                    icon: const Icon(Icons.image_outlined, size: 16),
-                                    label: Text(!hasActiveImage ? 'Load Image' : 'Replace Image'),
-                                  ),
-                                ] else if (mode == AppMode.levelEditor) ...[
-                                  // Tool SegmentedButton
-                                  SegmentedButton<LevelTool>(
-                                    showSelectedIcon: false,
-                                    style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                                    segments: [
-                                      for (final tool in LevelTool.values)
-                                        if ((activeLayer != MapLayer.island &&
-                                                activeLayer != MapLayer.decoration) ||
-                                            (tool != LevelTool.connect && tool != LevelTool.spawn))
-                                          ButtonSegment(
-                                            value: tool,
-                                            tooltip: tool.label,
-                                            icon: Icon(switch (tool) {
-                                              LevelTool.select => Icons.near_me_outlined,
-                                              LevelTool.multi => Icons.select_all,
-                                              LevelTool.stamp => Icons.add_box_outlined,
-                                              LevelTool.connect => Icons.hub_outlined,
-                                              LevelTool.spawn => Icons.flag_outlined,
-                                              LevelTool.erase => Icons.cleaning_services,
-                                            }),
-                                          ),
-                                    ],
-                                    selected: {levelTool},
-                                    onSelectionChanged: (s) => levelNotifier!.setTool(s.first),
-                                  ),
-                                  const SizedBox(width: 12),
-
-                                  // Island Brush Controls
-                                  if (activeLayer == MapLayer.island) ...[
-                                    const Icon(Icons.brush, size: 16),
-                                    const SizedBox(width: 4),
-                                    SegmentedButton<int>(
+                        // Line 2: Tools and Action buttons (horizontal scrollable row).
+                        // The pixel editor brings its own toolbar inside its page,
+                        // so this row is omitted for it.
+                        if (mode != AppMode.pixelEditor)
+                          Container(
+                            height: 44,
+                            color: theme.colorScheme.surfaceContainerHigh,
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                children: [
+                                  if (mode == AppMode.assetDefiner) ...[
+                                    // Tool SegmentedButton
+                                    SegmentedButton<Phase1Tool>(
                                       showSelectedIcon: false,
                                       style: const ButtonStyle(
                                         visualDensity: VisualDensity.compact,
                                       ),
-                                      segments: const [
-                                        ButtonSegment(value: 0, label: Text('1x1')),
-                                        ButtonSegment(value: 1, label: Text('3x3')),
-                                        ButtonSegment(value: 2, label: Text('5x5')),
-                                        ButtonSegment(value: 3, label: Text('7x7')),
+                                      segments: [
+                                        for (final t in Phase1Tool.values)
+                                          if ((activeCategory ==
+                                                  BlockCategory.track) ||
+                                              (activeCategory ==
+                                                      BlockCategory
+                                                          .islandTile &&
+                                                  t != Phase1Tool.paintMask &&
+                                                  t != Phase1Tool.addPort &&
+                                                  t !=
+                                                      Phase1Tool
+                                                          .drawPhysicsArea) ||
+                                              (activeCategory ==
+                                                      BlockCategory
+                                                          .decoration &&
+                                                  t != Phase1Tool.addPort &&
+                                                  t !=
+                                                      Phase1Tool
+                                                          .drawPhysicsArea))
+                                            ButtonSegment(
+                                              value: t,
+                                              tooltip: t.label,
+                                              icon: Icon(switch (t) {
+                                                Phase1Tool.select =>
+                                                  Icons.near_me_outlined,
+                                                Phase1Tool.move =>
+                                                  Icons.open_with,
+                                                Phase1Tool.drawBox =>
+                                                  Icons.crop_square,
+                                                Phase1Tool.paintMask =>
+                                                  Icons.brush_outlined,
+                                                Phase1Tool.addPort =>
+                                                  Icons.adjust,
+                                                Phase1Tool.drawPhysicsArea =>
+                                                  Icons.polyline,
+                                              }),
+                                            ),
                                       ],
-                                      selected: {islandBrushRadius},
-                                      onSelectionChanged: (s) =>
-                                          levelNotifier!.setIslandBrushRadius(s.first),
+                                      selected: {assetTool},
+                                      onSelectionChanged: (selection) =>
+                                          assetNotifier.setTool(
+                                            selection.first,
+                                          ),
                                     ),
-                                    const SizedBox(width: 6),
+                                    const SizedBox(width: 12),
+
+                                    // Action Buttons
                                     FilledButton.tonalIcon(
-                                      onPressed: () => _handleAutotile(activeId!),
+                                      onPressed: assetNotifier.loadImage,
                                       style: FilledButton.styleFrom(
                                         visualDensity: VisualDensity.compact,
                                       ),
-                                      icon: const Icon(Icons.grass, size: 16),
-                                      label: const Text('Autotile'),
+                                      icon: const Icon(
+                                        Icons.image_outlined,
+                                        size: 16,
+                                      ),
+                                      label: Text(
+                                        !hasActiveImage
+                                            ? 'Load Image'
+                                            : 'Replace Image',
+                                      ),
+                                    ),
+                                    if (hasActiveImage) ...[
+                                      const SizedBox(width: 8),
+                                      FilledButton.tonalIcon(
+                                        onPressed: () =>
+                                            _handleEditAssetInPixelEditor(ref),
+                                        style: FilledButton.styleFrom(
+                                          visualDensity: VisualDensity.compact,
+                                        ),
+                                        icon: const Icon(Icons.draw, size: 16),
+                                        label: const Text(
+                                          'Edit in Pixel Editor',
+                                        ),
+                                      ),
+                                    ],
+                                  ] else if (mode == AppMode.levelEditor) ...[
+                                    // Tool SegmentedButton
+                                    SegmentedButton<LevelTool>(
+                                      showSelectedIcon: false,
+                                      style: const ButtonStyle(
+                                        visualDensity: VisualDensity.compact,
+                                      ),
+                                      segments: [
+                                        for (final tool in LevelTool.values)
+                                          if ((activeLayer != MapLayer.island &&
+                                                  activeLayer !=
+                                                      MapLayer.decoration) ||
+                                              (tool != LevelTool.connect &&
+                                                  tool != LevelTool.spawn))
+                                            ButtonSegment(
+                                              value: tool,
+                                              tooltip: tool.label,
+                                              icon: Icon(switch (tool) {
+                                                LevelTool.select =>
+                                                  Icons.near_me_outlined,
+                                                LevelTool.multi =>
+                                                  Icons.select_all,
+                                                LevelTool.stamp =>
+                                                  Icons.add_box_outlined,
+                                                LevelTool.connect =>
+                                                  Icons.hub_outlined,
+                                                LevelTool.spawn =>
+                                                  Icons.flag_outlined,
+                                                LevelTool.erase =>
+                                                  Icons.cleaning_services,
+                                              }),
+                                            ),
+                                      ],
+                                      selected: {levelTool},
+                                      onSelectionChanged: (s) =>
+                                          levelNotifier!.setTool(s.first),
                                     ),
                                     const SizedBox(width: 12),
+
+                                    // Island Brush Controls
+                                    if (activeLayer == MapLayer.island) ...[
+                                      const Icon(Icons.brush, size: 16),
+                                      const SizedBox(width: 4),
+                                      SegmentedButton<int>(
+                                        showSelectedIcon: false,
+                                        style: const ButtonStyle(
+                                          visualDensity: VisualDensity.compact,
+                                        ),
+                                        segments: const [
+                                          ButtonSegment(
+                                            value: 0,
+                                            label: Text('1x1'),
+                                          ),
+                                          ButtonSegment(
+                                            value: 1,
+                                            label: Text('3x3'),
+                                          ),
+                                          ButtonSegment(
+                                            value: 2,
+                                            label: Text('5x5'),
+                                          ),
+                                          ButtonSegment(
+                                            value: 3,
+                                            label: Text('7x7'),
+                                          ),
+                                        ],
+                                        selected: {islandBrushRadius},
+                                        onSelectionChanged: (s) =>
+                                            levelNotifier!.setIslandBrushRadius(
+                                              s.first,
+                                            ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      FilledButton.tonalIcon(
+                                        onPressed: () =>
+                                            _handleAutotile(activeId!),
+                                        style: FilledButton.styleFrom(
+                                          visualDensity: VisualDensity.compact,
+                                        ),
+                                        icon: const Icon(Icons.grass, size: 16),
+                                        label: const Text('Autotile'),
+                                      ),
+                                      const SizedBox(width: 12),
+                                    ],
                                   ],
                                 ],
-                              ],
+                              ),
                             ),
                           ),
-                        ),
                       ],
                     ),
                   ),
@@ -989,9 +1524,17 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
 
                   // Main View Content
                   Expanded(
-                    child: activeId == null
-                        ? const AssetDefinerPage()
-                        : LevelEditorPage(key: ValueKey(activeId), tabId: activeId),
+                    child: activeId != null
+                        ? LevelEditorPage(
+                            key: ValueKey(activeId),
+                            tabId: activeId,
+                          )
+                        : activePixelId != null
+                        ? PixelEditorPage(
+                            key: ValueKey('pixel-$activePixelId'),
+                            tabId: activePixelId,
+                          )
+                        : const AssetDefinerPage(),
                   ),
                   const Divider(height: 1),
 
@@ -1008,26 +1551,38 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Widget
                                 ? (physicsStatusMessage ??
                                       assetStatusMessage ??
                                       'Asset Definer ready')
+                                : mode == AppMode.pixelEditor
+                                ? (pixelStatusMessage ?? 'Pixel Editor ready')
                                 : (levelStatusMessage ?? 'Level Editor ready'),
-                            style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              fontSize: 11,
+                            ),
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         if (mode == AppMode.levelEditor) ...[
                           Text(
                             '$placementsLength blocks placed',
-                            style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              fontSize: 11,
+                            ),
                           ),
                           const SizedBox(width: 16),
                           if (hasSpawn)
                             const Text(
                               'Spawn set',
-                              style: TextStyle(color: Colors.greenAccent, fontSize: 11),
+                              style: TextStyle(
+                                color: Colors.greenAccent,
+                                fontSize: 11,
+                              ),
                             )
                           else
                             const Text(
                               'No Spawn',
-                              style: TextStyle(color: Colors.orangeAccent, fontSize: 11),
+                              style: TextStyle(
+                                color: Colors.orangeAccent,
+                                fontSize: 11,
+                              ),
                             ),
                         ],
                       ],
@@ -1054,9 +1609,16 @@ class _DecorationSourceList extends ConsumerWidget {
 
   /// Removing a decoration image also drops the blocks masked on it, so it is
   /// confirmed first.
-  Future<void> _confirmDelete(BuildContext context, WidgetRef ref, int index, String label) async {
+  Future<void> _confirmDelete(
+    BuildContext context,
+    WidgetRef ref,
+    int index,
+    String label,
+  ) async {
     final decorationMasks = ref.read(assetDefinerProvider).decorationMasks;
-    final blockCount = index < decorationMasks.length ? decorationMasks[index].length : 0;
+    final blockCount = index < decorationMasks.length
+        ? decorationMasks[index].length
+        : 0;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1066,8 +1628,14 @@ class _DecorationSourceList extends ConsumerWidget {
           'This cannot be undone.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Remove')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
         ],
       ),
     );
@@ -1081,9 +1649,13 @@ class _DecorationSourceList extends ConsumerWidget {
     // Names joined by newline (which cannot appear in a filename), so the
     // watched value is a plain String and compares by value.
     final joined = ref.watch(
-      assetDefinerProvider.select((s) => s.decorationSources.map((d) => d.name).join('\n')),
+      assetDefinerProvider.select(
+        (s) => s.decorationSources.map((d) => d.name).join('\n'),
+      ),
     );
-    final activeIndex = ref.watch(assetDefinerProvider.select((s) => s.activeDecorationIndex));
+    final activeIndex = ref.watch(
+      assetDefinerProvider.select((s) => s.activeDecorationIndex),
+    );
     final names = joined.isEmpty ? const <String>[] : joined.split('\n');
     final notifier = ref.read(assetDefinerProvider.notifier);
 
@@ -1095,8 +1667,12 @@ class _DecorationSourceList extends ConsumerWidget {
             label: names[i].isEmpty ? 'image ${i + 1}' : names[i],
             selected: i == activeIndex,
             onTap: () => notifier.setActiveDecorationIndex(i),
-            onDelete: () =>
-                _confirmDelete(context, ref, i, names[i].isEmpty ? 'image ${i + 1}' : names[i]),
+            onDelete: () => _confirmDelete(
+              context,
+              ref,
+              i,
+              names[i].isEmpty ? 'image ${i + 1}' : names[i],
+            ),
           ),
         const SizedBox(height: 4),
         _AddDecorationButton(onTap: notifier.addDecorationImage),
@@ -1131,7 +1707,13 @@ class _AddDecorationButton extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(Icons.add, size: 18, color: color),
-              Text('Add', style: theme.textTheme.labelSmall?.copyWith(color: color, fontSize: 10)),
+              Text(
+                'Add',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: color,
+                  fontSize: 10,
+                ),
+              ),
             ],
           ),
         ),
@@ -1156,7 +1738,9 @@ class _DecorationSourceTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final fg = selected ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant;
+    final fg = selected
+        ? theme.colorScheme.primary
+        : theme.colorScheme.onSurfaceVariant;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(6),
@@ -1170,7 +1754,9 @@ class _DecorationSourceTile extends StatelessWidget {
               : Colors.transparent,
           borderRadius: BorderRadius.circular(6),
           border: selected
-              ? Border.all(color: theme.colorScheme.primary.withValues(alpha: 0.5))
+              ? Border.all(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.5),
+                )
               : null,
         ),
         child: Row(
@@ -1221,6 +1807,39 @@ class _Phase1TabChip extends ConsumerWidget {
       dirty: dirty,
       selected: selected,
       onSelect: onSelect,
+    );
+  }
+}
+
+/// One Pixel Editor document tab.
+class _PixelTabChip extends ConsumerWidget {
+  const _PixelTabChip({
+    super.key,
+    required this.id,
+    required this.selected,
+    required this.onSelect,
+    required this.onClose,
+  });
+
+  final int id;
+  final bool selected;
+  final VoidCallback onSelect;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(
+      pixelEditorProvider(
+        id,
+      ).select((s) => (displayName: s.displayName, isDirty: s.isDirty)),
+    );
+    return _TabChip(
+      icon: Icons.draw,
+      label: state.displayName,
+      dirty: state.isDirty,
+      selected: selected,
+      onSelect: onSelect,
+      onClose: onClose,
     );
   }
 }
@@ -1277,7 +1896,9 @@ class _TabChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final fg = selected ? theme.colorScheme.onSurface : theme.colorScheme.onSurfaceVariant;
+    final fg = selected
+        ? theme.colorScheme.onSurface
+        : theme.colorScheme.onSurfaceVariant;
     return InkWell(
       onTap: onSelect,
       child: Container(
@@ -1287,13 +1908,17 @@ class _TabChip extends StatelessWidget {
         decoration: BoxDecoration(
           // The active tab shares the toolbar surface directly below it so the
           // two read as one connected panel, Chrome-style.
-          color: selected ? theme.colorScheme.surfaceContainerHigh : Colors.transparent,
+          color: selected
+              ? theme.colorScheme.surfaceContainerHigh
+              : Colors.transparent,
           border: Border(
             top: BorderSide(
               color: selected ? theme.colorScheme.primary : Colors.transparent,
               width: 2,
             ),
-            right: BorderSide(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.4)),
+            right: BorderSide(
+              color: theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
+            ),
           ),
         ),
         child: LayoutBuilder(
@@ -1318,7 +1943,9 @@ class _TabChip extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: fg,
-                      fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                      fontWeight: selected
+                          ? FontWeight.w600
+                          : FontWeight.normal,
                     ),
                   ),
                 ),
@@ -1327,7 +1954,10 @@ class _TabChip extends StatelessWidget {
                   Container(
                     width: 7,
                     height: 7,
-                    decoration: BoxDecoration(color: fg, shape: BoxShape.circle),
+                    decoration: BoxDecoration(
+                      color: fg,
+                      shape: BoxShape.circle,
+                    ),
                   ),
                 ],
                 if (onClose != null && showClose) ...[
