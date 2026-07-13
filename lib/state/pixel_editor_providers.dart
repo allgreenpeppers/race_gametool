@@ -270,6 +270,15 @@ class AssetPixelTarget {
 
   final BlockCategory category;
   final int? decorationIndex;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AssetPixelTarget &&
+      other.category == category &&
+      other.decorationIndex == decorationIndex;
+
+  @override
+  int get hashCode => Object.hash(category, decorationIndex);
 }
 
 class _Snapshot {
@@ -603,6 +612,20 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
 
   void setBrushSize(int size) =>
       ref.read(pixelEditorPreferencesProvider.notifier).setBrushSize(size);
+
+  /// The current editor deliberately exposes one editable layer. Its opacity
+  /// belongs to the document, so it is undoable and persists in `.rgpix` and
+  /// embedded bundle sources.
+  void setLayerOpacity(double opacity) {
+    final value = opacity.clamp(0.0, 1.0).toDouble();
+    if (_layer.opacity == value) return;
+    _commitFloating(silent: true);
+    _pushUndo();
+    final layers = [...state.document.layers];
+    layers[0] = layers[0].copyWith(opacity: value);
+    state = state.copyWith(document: state.document.copyWith(layers: layers));
+    _touch(status: 'Layer opacity: ${(value * 100).round()}%');
+  }
 
   void setFillTolerance(int tolerance) => ref
       .read(pixelEditorPreferencesProvider.notifier)
@@ -1768,6 +1791,19 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     String? status,
     bool isDirty = false,
   }) {
+    final flattened = project.document.layers.length != 1;
+    if (flattened) {
+      project = RgpixFile(
+        document: PixelDocument(
+          width: project.document.width,
+          height: project.document.height,
+          layers: [
+            PixelLayer(name: 'Layer 1', pixels: project.document.composite()),
+          ],
+        ),
+        palette: project.palette,
+      );
+    }
     _undoStack.clear();
     _redoStack.clear();
     _strokeBase = null;
@@ -1793,7 +1829,11 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
       assetTarget: () => assetTarget,
       canUndo: false,
       canRedo: false,
-      statusMessage: () => status ?? 'Opened $displayName',
+      statusMessage: () =>
+          status ??
+          (flattened
+              ? 'Opened $displayName as a single flattened layer'
+              : 'Opened $displayName'),
     );
     _scheduleFloatingRebuild(null);
     _scheduleRebuild(state.document);

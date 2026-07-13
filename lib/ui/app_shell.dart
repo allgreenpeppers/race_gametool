@@ -372,6 +372,14 @@ class _AppShellState extends ConsumerState<AppShell>
           ? assetState.activeDecorationIndex
           : null,
     );
+    final workspace = ref.read(workspaceProvider);
+    for (final existingId in workspace.pixelTabs) {
+      final existing = ref.read(pixelEditorProvider(existingId));
+      if (existing.assetTarget == target) {
+        ref.read(workspaceProvider.notifier).activatePixelTab(existingId);
+        return;
+      }
+    }
     final id = ref.read(workspaceProvider.notifier).openPixelTab();
     final error = ref
         .read(pixelEditorProvider(id).notifier)

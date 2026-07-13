@@ -14,9 +14,12 @@ terms only.
   As. Pixel-specific file commands are hidden in the other editors.
 - Import Image preserves exact dimensions and pixels: one source pixel maps to
   one canvas pixel, with no scaling or filtering.
-- Asset Definer images have an **Edit in Pixel Editor** action. If the image has
-  an embedded `.rgpix` source, it is restored exactly; older PNG-only bundles
-  are opened as a one-layer pixel document at their native resolution.
+- Asset Definer images have an **Edit in Pixel Editor** action. A one-layer
+  embedded `.rgpix` source is restored exactly; older PNG-only bundles are
+  opened as a one-layer pixel document at their native resolution. Multi-layer
+  projects are flattened because layer editing is not available yet.
+- Opening an Asset Definer source that is already being edited activates its
+  existing Pixel Editor tab instead of creating a second, conflicting editor.
 - **Send to Asset Definer** stores both the flattened PNG and editable `.rgpix`
   source. Saving a tab opened from Asset Definer updates the same embedded
   source without requiring a separate project file.
@@ -31,6 +34,8 @@ dictionaries continue to be derived by the existing bundle pipeline.
 ## Editing tools
 
 - Pencil and eraser use a 1–32 px slider.
+- The current single editable layer has a document-owned 0–100% opacity
+  control. Opacity is undoable and persists in `.rgpix` and embedded sources.
 - Line, rectangle, and ellipse use pixel-accurate previews and commit as one
   undo step.
 - Rectangle and ellipse support two interaction modes:
@@ -95,7 +100,9 @@ and tool preferences are intentionally not serialized into `.rgpix`.
 ## File formats and architecture
 
 `.rgpix` version 1 is JSON containing dimensions, a bottom-to-top layer stack,
-and palette. Layer pixels are portable row-major RGBA bytes encoded as base64.
+and palette. The current editor normalizes a multi-layer project to one
+flattened editable layer on opening; layer editing is deferred. Layer pixels
+are portable row-major RGBA bytes encoded as base64.
 Older files that contain the former `settings` object remain readable; that
 field is ignored because settings now belong to the app session.
 

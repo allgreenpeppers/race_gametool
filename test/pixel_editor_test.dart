@@ -78,6 +78,20 @@ void main() {
     });
   });
 
+  test('the single layer opacity is undoable and changes the composite', () {
+    notifier.tapAt(0, 0);
+    notifier.setLayerOpacity(0.4);
+
+    expect(read().document.layers, hasLength(1));
+    expect(read().document.layers.single.opacity, 0.4);
+    expect((read().document.composite()[0] >>> 24) & 0xff, closeTo(102, 1));
+    expect(read().isDirty, isTrue);
+
+    notifier.undo();
+    expect(read().document.layers.single.opacity, 1);
+    expect(read().document.composite()[0], red);
+  });
+
   group('shape tools', () {
     test('line drag commits on release and undoes as one step', () {
       notifier.setTool(PixelTool.line);
@@ -550,7 +564,56 @@ void main() {
     expect(read().imageColors, contains(0xff010203));
   });
 
+  test('multi-layer projects open as one editable flattened layer', () {
+    final source = img.Image(width: 1, height: 1, numChannels: 4)
+      ..setPixelRgba(0, 0, 0, 0, 0, 0);
+    final project = RgpixFile(
+      document: PixelDocument(
+        width: 1,
+        height: 1,
+        layers: [
+          PixelLayer(name: 'bottom', pixels: Uint32List.fromList([red])),
+          PixelLayer(
+            name: 'top',
+            opacity: 0.5,
+            pixels: Uint32List.fromList([blue]),
+          ),
+        ],
+      ),
+    );
+    final expected = project.document.composite().single;
+
+    final error = notifier.loadAssetSource(
+      imageBytes: Uint8List.fromList(img.encodePng(source)),
+      name: 'layered.rgpix',
+      target: const AssetPixelTarget(category: BlockCategory.track),
+      pixelProjectBytes: Uint8List.fromList(utf8.encode(project.encode())),
+    );
+
+    expect(error, isNull);
+    expect(read().document.layers, hasLength(1));
+    expect(read().document.layers.single.pixels.single, expected);
+    expect(read().statusMessage, contains('single flattened layer'));
+  });
+
   group('Asset Definer hand-off', () {
+    test(
+      'preserves the single layer opacity in the embedded project',
+      () async {
+        notifier.tapAt(0, 0);
+        notifier.setLayerOpacity(0.35);
+
+        await notifier.sendToAssetDefiner(BlockCategory.track);
+
+        final image = container
+            .read(assetDefinerProvider)
+            .images[BlockCategory.track]!;
+        final project = RgpixFile.decode(utf8.decode(image.pixelProjectBytes!));
+        expect(project.document.layers, hasLength(1));
+        expect(project.document.layers.single.opacity, 0.35);
+      },
+    );
+
     test('replaces the track source image with the drawn pixels', () async {
       notifier.newDocument(32, 16);
       notifier.setColor(red);

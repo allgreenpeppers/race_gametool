@@ -3,8 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:race_gametool/state/app_providers.dart';
+import 'package:race_gametool/state/asset_definer_providers.dart';
 import 'package:race_gametool/state/pixel_editor_providers.dart';
+import 'package:race_gametool/models/block_def.dart';
 import 'package:race_gametool/ui/app_shell.dart';
 
 void main() {
@@ -91,14 +94,32 @@ void main() {
       greaterThan(1200),
       reason: 'Send stays pinned at the right edge',
     );
-    expect(find.byType(Slider), findsOneWidget);
-    final brushSlider = tester.widget<Slider>(find.byType(Slider));
+    final pixelId = container.read(workspaceProvider).activePixelTab!;
+    final initialSliders = tester.widgetList<Slider>(find.byType(Slider));
+    final brushSlider = initialSliders.singleWhere(
+      (slider) => slider.max == 32,
+    );
     expect(brushSlider.min, 1);
     expect(brushSlider.max, 32);
     expect(brushSlider.divisions, 31);
+    final opacitySlider = initialSliders.singleWhere(
+      (slider) => slider.max == 1,
+    );
+    expect(opacitySlider.min, 0);
+    expect(opacitySlider.divisions, 100);
+    opacitySlider.onChanged!(0.42);
+    await tester.pump();
+    expect(
+      container
+          .read(pixelEditorProvider(pixelId))
+          .document
+          .layers
+          .single
+          .opacity,
+      closeTo(0.42, 0.001),
+    );
     expect(find.text('Move / Transform'), findsNothing);
 
-    final pixelId = container.read(workspaceProvider).activePixelTab!;
     container
         .read(pixelEditorProvider(pixelId).notifier)
         .setTool(PixelTool.fill);
@@ -111,10 +132,59 @@ void main() {
         .setFillShadeEnabled(true);
     await tester.pump();
     final shadedSliders = tester.widgetList<Slider>(find.byType(Slider));
-    expect(shadedSliders, hasLength(3));
+    expect(shadedSliders, hasLength(4));
     await tester.pumpWidget(const SizedBox());
     container.dispose();
     await tester.pump(const Duration(milliseconds: 20));
     debugDefaultTargetPlatformOverride = null;
   });
+
+  testWidgets(
+    'editing the same Asset Definer source activates its existing Pixel tab',
+    (tester) async {
+      final container = ProviderContainer();
+      await tester.binding.setSurfaceSize(const Size(1440, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final source = img.Image(width: 16, height: 16, numChannels: 4)
+        ..setPixelRgba(0, 0, 255, 0, 0, 255);
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(home: AppShell()),
+        ),
+      );
+      await tester.pump();
+
+      final error = await tester.runAsync(
+        () => container.read(assetDefinerProvider.notifier).importImageBytes(
+              Uint8List.fromList(img.encodePng(source)),
+              'track.png',
+              BlockCategory.track,
+            ),
+      );
+      expect(error, isNull);
+      await tester.pump();
+
+      await tester.tap(find.text('Edit in Pixel Editor'));
+      await tester.pump();
+      final firstId = container.read(workspaceProvider).activePixelTab;
+      expect(firstId, isNotNull);
+      expect(container.read(workspaceProvider).pixelTabs, hasLength(1));
+
+      container.read(workspaceProvider.notifier).activatePhase1();
+      await tester.pump();
+      await tester.tap(find.text('Edit in Pixel Editor'));
+      await tester.pump();
+
+      final workspace = container.read(workspaceProvider);
+      expect(workspace.pixelTabs, hasLength(1));
+      expect(workspace.activePixelTab, firstId);
+
+      await tester.pumpWidget(const SizedBox());
+      container.dispose();
+      await tester.pump(const Duration(milliseconds: 20));
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
 }

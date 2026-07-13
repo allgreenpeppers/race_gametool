@@ -199,6 +199,9 @@ class PixelEditorPage extends ConsumerWidget {
     final tool = ref.watch(pixelEditorProvider(tabId).select((s) => s.tool));
     final preferences = ref.watch(pixelEditorPreferencesProvider);
     final brushSize = preferences.brushSize;
+    final layerOpacity = ref.watch(
+      pixelEditorProvider(tabId).select((s) => s.document.layers.first.opacity),
+    );
     final symmetry = preferences.symmetry;
     final fillContiguous = preferences.fillContiguous;
     final fillTolerance = preferences.fillTolerance;
@@ -319,6 +322,29 @@ class PixelEditorPage extends ConsumerWidget {
                         width: 38,
                         child: Text(
                           '$brushSize px',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      const Text('Opacity', style: TextStyle(fontSize: 11)),
+                      Tooltip(
+                        message: 'Opacity of the single editable layer',
+                        child: SizedBox(
+                          width: 110,
+                          child: Slider(
+                            min: 0,
+                            max: 1,
+                            divisions: 100,
+                            value: layerOpacity,
+                            label: '${(layerOpacity * 100).round()}%',
+                            onChanged: notifier.setLayerOpacity,
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 32,
+                        child: Text(
+                          '${(layerOpacity * 100).round()}%',
                           style: const TextStyle(fontSize: 11),
                         ),
                       ),
