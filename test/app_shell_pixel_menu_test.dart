@@ -83,6 +83,7 @@ void main() {
       findsOneWidget,
       reason: 'Pixel tools live in the left sidebar',
     );
+    expect(find.text('Mosaic Brush'), findsOneWidget);
     expect(tester.widget<Text>(find.text('Magic Wand')).maxLines, 2);
     expect(
       tester.getSize(find.byKey(const Key('pixel-options-toolbar'))).width,
@@ -122,6 +123,28 @@ void main() {
 
     container
         .read(pixelEditorProvider(pixelId).notifier)
+        .setTool(PixelTool.mosaic);
+    await tester.pump();
+    expect(find.text('Mosaic Color A'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('mosaic-color-b')));
+    await tester.pump();
+    expect(find.text('Mosaic Color B'), findsOneWidget);
+    expect(
+      container.read(pixelEditorProvider(pixelId)).mosaicColorSlot,
+      MosaicColorSlot.secondary,
+    );
+    final colorField = tester.widget<TextField>(
+      find.byKey(const Key('pixel-color-hex')),
+    );
+    colorField.onSubmitted!('FF123456');
+    await tester.pump();
+    expect(
+      container.read(pixelEditorProvider(pixelId)).mosaicSecondaryColor,
+      0xff123456,
+    );
+
+    container
+        .read(pixelEditorProvider(pixelId).notifier)
         .setTool(PixelTool.fill);
     await tester.pump();
     final sliders = tester.widgetList<Slider>(find.byType(Slider));
@@ -157,7 +180,9 @@ void main() {
       await tester.pump();
 
       final error = await tester.runAsync(
-        () => container.read(assetDefinerProvider.notifier).importImageBytes(
+        () => container
+            .read(assetDefinerProvider.notifier)
+            .importImageBytes(
               Uint8List.fromList(img.encodePng(source)),
               'track.png',
               BlockCategory.track,

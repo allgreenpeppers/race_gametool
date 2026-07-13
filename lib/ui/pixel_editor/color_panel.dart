@@ -27,7 +27,7 @@ class _ColorPanelState extends ConsumerState<ColorPanel> {
   @override
   void initState() {
     super.initState();
-    _syncFrom(ref.read(pixelEditorProvider(widget.tabId)).color);
+    _syncFrom(_panelColor(ref.read(pixelEditorProvider(widget.tabId))));
   }
 
   @override
@@ -55,7 +55,7 @@ class _ColorPanelState extends ConsumerState<ColorPanel> {
     final argb = hsv.toColor().toARGB32();
     _lastSeenColor = argb;
     _hexController.text = argb.toRadixString(16).padLeft(8, '0').toUpperCase();
-    ref.read(pixelEditorProvider(widget.tabId).notifier).setColor(argb);
+    _setPanelColor(argb);
   }
 
   void _applyHex(String text) {
@@ -63,15 +63,45 @@ class _ColorPanelState extends ConsumerState<ColorPanel> {
     if (s.length == 6) s = 'FF$s';
     final value = int.tryParse(s, radix: 16);
     if (value == null || s.length != 8) return;
-    ref.read(pixelEditorProvider(widget.tabId).notifier).setColor(value);
+    _setPanelColor(value);
+  }
+
+  int _panelColor(PixelEditorState state) =>
+      state.tool == PixelTool.mosaic &&
+          state.mosaicColorSlot == MosaicColorSlot.secondary
+      ? state.mosaicSecondaryColor
+      : state.color;
+
+  void _setPanelColor(int argb) {
+    final state = ref.read(pixelEditorProvider(widget.tabId));
+    final notifier = ref.read(pixelEditorProvider(widget.tabId).notifier);
+    if (state.tool == PixelTool.mosaic &&
+        state.mosaicColorSlot == MosaicColorSlot.secondary) {
+      notifier.setMosaicSecondaryColor(argb);
+    } else {
+      notifier.setColor(argb);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final color = ref.watch(
-      pixelEditorProvider(widget.tabId).select((s) => s.color),
+    final colorState = ref.watch(
+      pixelEditorProvider(widget.tabId).select(
+        (s) => (
+          tool: s.tool,
+          primary: s.color,
+          secondary: s.mosaicSecondaryColor,
+          mosaicSlot: s.mosaicColorSlot,
+        ),
+      ),
     );
+    final isMosaic = colorState.tool == PixelTool.mosaic;
+    final editingMosaicSecondary =
+        isMosaic && colorState.mosaicSlot == MosaicColorSlot.secondary;
+    final color = editingMosaicSecondary
+        ? colorState.secondary
+        : colorState.primary;
     final palette = ref.watch(
       pixelEditorProvider(widget.tabId).select((s) => s.palette),
     );
@@ -87,7 +117,14 @@ class _ColorPanelState extends ConsumerState<ColorPanel> {
       child: ListView(
         padding: const EdgeInsets.all(12),
         children: [
-          Text('Color', style: theme.textTheme.titleSmall),
+          Text(
+            isMosaic
+                ? editingMosaicSecondary
+                      ? 'Mosaic Color B'
+                      : 'Mosaic Color A'
+                : 'Color',
+            style: theme.textTheme.titleSmall,
+          ),
           const SizedBox(height: 8),
           Row(
             children: [
@@ -103,6 +140,7 @@ class _ColorPanelState extends ConsumerState<ColorPanel> {
               const SizedBox(width: 10),
               Expanded(
                 child: TextField(
+                  key: const Key('pixel-color-hex'),
                   controller: _hexController,
                   decoration: const InputDecoration(
                     prefixText: '#',
@@ -119,6 +157,15 @@ class _ColorPanelState extends ConsumerState<ColorPanel> {
               ),
             ],
           ),
+          if (editingMosaicSecondary) ...[
+            const SizedBox(height: 4),
+            Text(
+              '00000000 skips B cells without erasing.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           _GradientSlider(
             label: 'H',
@@ -177,7 +224,7 @@ class _ColorPanelState extends ConsumerState<ColorPanel> {
               children: [
                 for (final imageColor in imageColors)
                   GestureDetector(
-                    onTap: () => notifier.setColor(imageColor),
+                    onTap: () => _setPanelColor(imageColor),
                     child: Container(
                       width: 22,
                       height: 22,
@@ -207,7 +254,7 @@ class _ColorPanelState extends ConsumerState<ColorPanel> {
                 iconSize: 16,
                 tooltip: 'Add current color',
                 icon: const Icon(Icons.add),
-                onPressed: notifier.addCurrentColorToPalette,
+                onPressed: () => notifier.addColorToPalette(color),
               ),
               IconButton(
                 visualDensity: VisualDensity.compact,
@@ -239,7 +286,7 @@ class _ColorPanelState extends ConsumerState<ColorPanel> {
             children: [
               for (var i = 0; i < palette.length; i++)
                 GestureDetector(
-                  onTap: () => notifier.setColor(palette[i]),
+                  onTap: () => _setPanelColor(palette[i]),
                   onSecondaryTap: () => notifier.removePaletteColor(i),
                   child: Container(
                     width: 22,

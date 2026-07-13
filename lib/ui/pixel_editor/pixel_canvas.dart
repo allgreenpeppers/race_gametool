@@ -529,11 +529,16 @@ class _PixelCanvasPainter extends CustomPainter {
     final y = hover!.dy.floor();
     if (x < 0 || y < 0 || x >= w || y >= h) return;
     final brush = preferences.brushSize;
-    final start = -(brush - 1) ~/ 2;
+    final (startX, startY) = state.tool == PixelTool.mosaic
+        ? (
+            mosaicCellStart(x, state.mosaicOrigin?.$1 ?? x, brush),
+            mosaicCellStart(y, state.mosaicOrigin?.$2 ?? y, brush),
+          )
+        : (x + (-(brush - 1) ~/ 2), y + (-(brush - 1) ~/ 2));
     canvas.drawRect(
       Rect.fromLTWH(
-        (x + start).toDouble(),
-        (y + start).toDouble(),
+        startX.toDouble(),
+        startY.toDouble(),
         brush.toDouble(),
         brush.toDouble(),
       ),

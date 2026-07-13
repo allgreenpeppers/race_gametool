@@ -24,6 +24,7 @@ enum PixelTool {
   line('Line'),
   rect('Rectangle'),
   ellipse('Ellipse'),
+  mosaic('Mosaic Brush'),
   fill('Fill / Replace'),
   eyedropper('Eyedropper'),
   selectRect('Select Rectangle'),
@@ -34,6 +35,9 @@ enum PixelTool {
   const PixelTool(this.label);
   final String label;
 }
+
+/// Which mosaic color the shared right-hand color panel currently edits.
+enum MosaicColorSlot { primary, secondary }
 
 enum ShapeInteractionMode { drag, planned }
 
@@ -292,6 +296,8 @@ class PixelEditorState {
     required this.document,
     this.tool = PixelTool.pencil,
     this.color = 0xff000000,
+    this.mosaicSecondaryColor = 0x00000000,
+    this.mosaicColorSlot = MosaicColorSlot.primary,
     this.palette = defaultPixelPalette,
     this.imageColors = const [],
     this.canvasImage,
@@ -302,6 +308,7 @@ class PixelEditorState {
     this.selectDraft,
     this.lassoDraft,
     this.shapePlan,
+    this.mosaicOrigin,
     this.isDirty = false,
     this.filePath,
     this.displayName = 'Untitled Pixel',
@@ -316,6 +323,12 @@ class PixelEditorState {
 
   /// Active drawing color, ARGB.
   final int color;
+
+  /// Mosaic color B. Fully transparent means its checkerboard cells skip
+  /// painting rather than clear the canvas.
+  final int mosaicSecondaryColor;
+
+  final MosaicColorSlot mosaicColorSlot;
 
   /// The indexed palette, ARGB entries.
   final List<int> palette;
@@ -344,6 +357,10 @@ class PixelEditorState {
   final List<(double, double)>? lassoDraft;
   final ShapePlan? shapePlan;
 
+  /// Transient stroke origin used to align the mosaic hover preview with the
+  /// cells that will be stamped. It is never written to a project file.
+  final (int, int)? mosaicOrigin;
+
   final bool isDirty;
   final String? filePath;
   final String displayName;
@@ -356,6 +373,8 @@ class PixelEditorState {
     PixelDocument? document,
     PixelTool? tool,
     int? color,
+    int? mosaicSecondaryColor,
+    MosaicColorSlot? mosaicColorSlot,
     List<int>? palette,
     List<int>? imageColors,
     ui.Image? Function()? canvasImage,
@@ -366,6 +385,7 @@ class PixelEditorState {
     SelectDraft? Function()? selectDraft,
     List<(double, double)>? Function()? lassoDraft,
     ShapePlan? Function()? shapePlan,
+    (int, int)? Function()? mosaicOrigin,
     bool? isDirty,
     String? Function()? filePath,
     String? displayName,
@@ -377,6 +397,8 @@ class PixelEditorState {
     document: document ?? this.document,
     tool: tool ?? this.tool,
     color: color ?? this.color,
+    mosaicSecondaryColor: mosaicSecondaryColor ?? this.mosaicSecondaryColor,
+    mosaicColorSlot: mosaicColorSlot ?? this.mosaicColorSlot,
     palette: palette ?? this.palette,
     imageColors: imageColors ?? this.imageColors,
     canvasImage: canvasImage != null ? canvasImage() : this.canvasImage,
@@ -387,6 +409,7 @@ class PixelEditorState {
     selectDraft: selectDraft != null ? selectDraft() : this.selectDraft,
     lassoDraft: lassoDraft != null ? lassoDraft() : this.lassoDraft,
     shapePlan: shapePlan != null ? shapePlan() : this.shapePlan,
+    mosaicOrigin: mosaicOrigin != null ? mosaicOrigin() : this.mosaicOrigin,
     isDirty: isDirty ?? this.isDirty,
     filePath: filePath != null ? filePath() : this.filePath,
     displayName: displayName ?? this.displayName,
@@ -409,6 +432,7 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
   Uint32List? _strokeBase;
   (int, int)? _shapeAnchor;
   (int, int)? _lastStrokePoint;
+  (int, int)? _mosaicAnchor;
 
   // Move-tool drag bookkeeping.
   (int, int)? _moveGrabOffset;
@@ -603,12 +627,20 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
       selectDraft: () => null,
       lassoDraft: () => null,
       shapePlan: () => null,
+      mosaicOrigin: () => null,
       statusMessage: () => tool.label,
     );
     _shapePlanEdge = null;
+    _mosaicAnchor = null;
   }
 
   void setColor(int argb) => state = state.copyWith(color: argb);
+
+  void setMosaicSecondaryColor(int argb) =>
+      state = state.copyWith(mosaicSecondaryColor: argb);
+
+  void setMosaicColorSlot(MosaicColorSlot slot) =>
+      state = state.copyWith(mosaicColorSlot: slot);
 
   void setBrushSize(int size) =>
       ref.read(pixelEditorPreferencesProvider.notifier).setBrushSize(size);
@@ -662,17 +694,16 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
 
   // --- Palette --------------------------------------------------------------
 
-  void addCurrentColorToPalette() {
-    if (state.palette.contains(state.color)) {
+  void addCurrentColorToPalette() => addColorToPalette(state.color);
+
+  void addColorToPalette(int color) {
+    if (state.palette.contains(color)) {
       state = state.copyWith(
         statusMessage: () => 'Color already in the palette',
       );
       return;
     }
-    state = state.copyWith(
-      palette: [...state.palette, state.color],
-      isDirty: true,
-    );
+    state = state.copyWith(palette: [...state.palette, color], isDirty: true);
   }
 
   void removePaletteColor(int index) {
@@ -1279,6 +1310,34 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
       preferences.symmetry,
     );
     final toPts = symmetryPoints(to.$1, to.$2, _w, _h, preferences.symmetry);
+    if (state.tool == PixelTool.mosaic) {
+      final anchor = _mosaicAnchor ?? from;
+      final anchorPts = symmetryPoints(
+        anchor.$1,
+        anchor.$2,
+        _w,
+        _h,
+        preferences.symmetry,
+      );
+      for (var i = 0; i < fromPts.length; i++) {
+        drawMosaicLine(
+          _layer.pixels,
+          _w,
+          _h,
+          fromPts[i].$1,
+          fromPts[i].$2,
+          toPts[i].$1,
+          toPts[i].$2,
+          state.color,
+          state.mosaicSecondaryColor,
+          originX: anchorPts[i].$1,
+          originY: anchorPts[i].$2,
+          tileSize: preferences.brushSize,
+          mask: state.selection,
+        );
+      }
+      return;
+    }
     for (var i = 0; i < fromPts.length; i++) {
       drawLine(
         _layer.pixels,
@@ -1359,8 +1418,13 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     switch (state.tool) {
       case PixelTool.pencil:
       case PixelTool.eraser:
+      case PixelTool.mosaic:
         _strokeBase = Uint32List.fromList(_layer.pixels);
         _lastStrokePoint = (x, y);
+        _mosaicAnchor = state.tool == PixelTool.mosaic ? (x, y) : null;
+        if (state.tool == PixelTool.mosaic) {
+          state = state.copyWith(mosaicOrigin: () => (x, y));
+        }
         final color = state.tool == PixelTool.eraser ? 0 : state.color;
         _paintSegment((x, y), (x, y), color);
         _touch();
@@ -1423,6 +1487,7 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     switch (state.tool) {
       case PixelTool.pencil:
       case PixelTool.eraser:
+      case PixelTool.mosaic:
         if (_strokeBase == null) return;
         final last = _lastStrokePoint ?? (x, y);
         if (last == (x, y)) return;
@@ -1510,6 +1575,7 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     switch (state.tool) {
       case PixelTool.pencil:
       case PixelTool.eraser:
+      case PixelTool.mosaic:
       case PixelTool.line:
         _finishDrawnStroke();
       case PixelTool.rect:
@@ -1592,10 +1658,12 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     _strokeBase = null;
     _shapeAnchor = null;
     _lastStrokePoint = null;
+    _mosaicAnchor = null;
     final result = Uint32List.fromList(_layer.pixels);
     _layer.pixels.setAll(0, base);
     _pushUndo();
     _layer.pixels.setAll(0, result);
+    state = state.copyWith(mosaicOrigin: () => null);
     _touch();
   }
 
@@ -1635,7 +1703,9 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     switch (state.tool) {
       case PixelTool.pencil:
       case PixelTool.eraser:
+      case PixelTool.mosaic:
         _strokeBase = Uint32List.fromList(_layer.pixels);
+        _mosaicAnchor = state.tool == PixelTool.mosaic ? (x, y) : null;
         final color = state.tool == PixelTool.eraser ? 0 : state.color;
         _paintSegment((x, y), (x, y), color);
         strokeEnd();
@@ -1738,6 +1808,7 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     _strokeBase = null;
     _shapeAnchor = null;
     _lastStrokePoint = null;
+    _mosaicAnchor = null;
     _moveGrabOffset = null;
     _scaleCorner = null;
     _dirtyBeforeFloating = null;
@@ -1751,6 +1822,7 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
       selectDraft: () => null,
       lassoDraft: () => null,
       shapePlan: () => null,
+      mosaicOrigin: () => null,
       isDirty: false,
       filePath: () => null,
       displayName: 'Untitled Pixel',
@@ -1809,6 +1881,7 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
     _strokeBase = null;
     _shapeAnchor = null;
     _lastStrokePoint = null;
+    _mosaicAnchor = null;
     _moveGrabOffset = null;
     _scaleCorner = null;
     _shapePlanEdge = null;
@@ -1823,6 +1896,7 @@ class PixelEditorNotifier extends Notifier<PixelEditorState> {
       selectDraft: () => null,
       lassoDraft: () => null,
       shapePlan: () => null,
+      mosaicOrigin: () => null,
       isDirty: isDirty,
       filePath: () => filePath,
       displayName: displayName,

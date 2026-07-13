@@ -78,6 +78,29 @@ void main() {
     });
   });
 
+  test(
+    'mosaic brush alternates from the stroke start with a tab-local B color',
+    () {
+      notifier.newDocument(8, 4);
+      notifier.setBrushSize(2);
+      notifier.setColor(red);
+      notifier.setMosaicSecondaryColor(blue);
+      notifier.setTool(PixelTool.mosaic);
+      notifier.strokeStart(1, 1);
+      notifier.strokeUpdate(6.9, 1);
+      notifier.strokeEnd();
+
+      expect(
+        [for (var x = 0; x < 8; x++) at(x, 1)],
+        [0, red, red, blue, blue, red, red, 0],
+      );
+      expect(read().mosaicSecondaryColor, blue);
+      expect(read().mosaicColorSlot, MosaicColorSlot.primary);
+      notifier.setMosaicColorSlot(MosaicColorSlot.secondary);
+      expect(read().mosaicColorSlot, MosaicColorSlot.secondary);
+    },
+  );
+
   test('the single layer opacity is undoable and changes the composite', () {
     notifier.tapAt(0, 0);
     notifier.setLayerOpacity(0.4);

@@ -14,6 +14,7 @@ IconData pixelToolIcon(PixelTool tool) => switch (tool) {
   PixelTool.line => Icons.timeline,
   PixelTool.rect => Icons.crop_square,
   PixelTool.ellipse => Icons.circle_outlined,
+  PixelTool.mosaic => Icons.grid_view,
   PixelTool.fill => Icons.format_color_fill,
   PixelTool.eyedropper => Icons.colorize,
   PixelTool.selectRect => Icons.highlight_alt,
@@ -28,6 +29,7 @@ String pixelToolShortcut(PixelTool tool) => switch (tool) {
   PixelTool.line => 'L',
   PixelTool.rect => 'R',
   PixelTool.ellipse => 'O',
+  PixelTool.mosaic => 'D',
   PixelTool.fill => 'G',
   PixelTool.eyedropper => 'I',
   PixelTool.selectRect => 'M',
@@ -197,6 +199,15 @@ class PixelEditorPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final notifier = ref.read(pixelEditorProvider(tabId).notifier);
     final tool = ref.watch(pixelEditorProvider(tabId).select((s) => s.tool));
+    final mosaicColors = ref.watch(
+      pixelEditorProvider(tabId).select(
+        (s) => (
+          primary: s.color,
+          secondary: s.mosaicSecondaryColor,
+          slot: s.mosaicColorSlot,
+        ),
+      ),
+    );
     final preferences = ref.watch(pixelEditorPreferencesProvider);
     final brushSize = preferences.brushSize;
     final layerOpacity = ref.watch(
@@ -233,6 +244,8 @@ class PixelEditorPage extends ConsumerWidget {
           notifier.setTool(PixelTool.rect),
       const SingleActivator(LogicalKeyboardKey.keyO): () =>
           notifier.setTool(PixelTool.ellipse),
+      const SingleActivator(LogicalKeyboardKey.keyD): () =>
+          notifier.setTool(PixelTool.mosaic),
       const SingleActivator(LogicalKeyboardKey.keyG): () =>
           notifier.setTool(PixelTool.fill),
       const SingleActivator(LogicalKeyboardKey.keyI): () =>
@@ -325,6 +338,77 @@ class PixelEditorPage extends ConsumerWidget {
                           style: const TextStyle(fontSize: 11),
                         ),
                       ),
+                      if (tool == PixelTool.mosaic) ...[
+                        const SizedBox(width: 12),
+                        const Text(
+                          'Mosaic color',
+                          style: TextStyle(fontSize: 11),
+                        ),
+                        const SizedBox(width: 8),
+                        SegmentedButton<MosaicColorSlot>(
+                          showSelectedIcon: false,
+                          style: const ButtonStyle(
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          segments: [
+                            ButtonSegment(
+                              value: MosaicColorSlot.primary,
+                              label: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    key: const Key('mosaic-color-a'),
+                                    width: 14,
+                                    height: 14,
+                                    decoration: BoxDecoration(
+                                      color: Color(mosaicColors.primary),
+                                      borderRadius: BorderRadius.circular(2),
+                                      border: Border.all(
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.outline,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  const Text('A'),
+                                ],
+                              ),
+                            ),
+                            ButtonSegment(
+                              value: MosaicColorSlot.secondary,
+                              label: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    key: const Key('mosaic-color-b'),
+                                    width: 14,
+                                    height: 14,
+                                    decoration: BoxDecoration(
+                                      color: Color(mosaicColors.secondary),
+                                      borderRadius: BorderRadius.circular(2),
+                                      border: Border.all(
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.outline,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    (mosaicColors.secondary >>> 24) == 0
+                                        ? 'B (Skip)'
+                                        : 'B',
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                          selected: {mosaicColors.slot},
+                          onSelectionChanged: (slots) =>
+                              notifier.setMosaicColorSlot(slots.first),
+                        ),
+                      ],
                       const SizedBox(width: 12),
                       const Text('Opacity', style: TextStyle(fontSize: 11)),
                       Tooltip(

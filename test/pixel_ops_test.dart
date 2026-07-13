@@ -58,6 +58,79 @@ void main() {
     });
   });
 
+  group('mosaic brush', () {
+    test('reports the same origin-aligned cell edge used for stamping', () {
+      expect(mosaicCellStart(1, 0, 2), 0);
+      expect(mosaicCellStart(2, 0, 2), 2);
+      expect(mosaicCellStart(0, 3, 2), -1);
+    });
+
+    test('anchors A/B cells at the first stroke pixel', () {
+      final p = buf(8, 4);
+
+      drawMosaicLine(
+        p,
+        8,
+        4,
+        1,
+        1,
+        6,
+        1,
+        r,
+        b,
+        originX: 1,
+        originY: 1,
+        tileSize: 2,
+      );
+
+      expect(row(p, 8, 1), [t, r, r, b, b, r, r, t]);
+      expect(row(p, 8, 2), [t, r, r, b, b, r, r, t]);
+    });
+
+    test('transparent B cells leave existing pixels untouched', () {
+      final p = Uint32List.fromList(List.filled(6 * 2, g));
+
+      drawMosaicLine(
+        p,
+        6,
+        2,
+        0,
+        0,
+        5,
+        0,
+        r,
+        t,
+        originX: 0,
+        originY: 0,
+        tileSize: 2,
+      );
+
+      expect(row(p, 6, 0), [r, r, g, g, r, r]);
+      expect(row(p, 6, 1), [r, r, g, g, r, r]);
+    });
+
+    test('keeps the same checker pattern when dragging before the origin', () {
+      final p = buf(5, 1);
+
+      drawMosaicLine(
+        p,
+        5,
+        1,
+        3,
+        0,
+        0,
+        0,
+        r,
+        b,
+        originX: 3,
+        originY: 0,
+        tileSize: 2,
+      );
+
+      expect(row(p, 5, 0), [r, b, b, r, r]);
+    });
+  });
+
   group('drawRectShape', () {
     test('outline leaves the interior untouched', () {
       final p = buf(4, 4);

@@ -34,6 +34,10 @@ dictionaries continue to be derived by the existing bundle pipeline.
 ## Editing tools
 
 - Pencil and eraser use a 1–32 px slider.
+- **Mosaic Brush** uses that same slider as its square-cell size. A stroke's
+  first pixel is the A/B checkerboard origin. Choose A or B in the toolbar,
+  then set it with the shared right-hand color panel. A transparent B
+  (`00000000`) skips those cells without painting or erasing existing pixels.
 - The current single editable layer has a document-owned 0–100% opacity
   control. Opacity is undoable and persists in `.rgpix` and embedded sources.
 - Line, rectangle, and ellipse use pixel-accurate previews and commit as one
@@ -94,8 +98,9 @@ rectangle/ellipse interaction mode.
 
 Document-owned state is limited to canvas dimensions, layers/pixels, and the
 editable palette. Tool choice, selection/floating state, image-color helpers,
-undo/redo history, and active color are tab-local working state. Presentation
-and tool preferences are intentionally not serialized into `.rgpix`.
+undo/redo history, active color, and Mosaic B are tab-local working state.
+Presentation and tool preferences are intentionally not serialized into
+`.rgpix`.
 
 ## File formats and architecture
 

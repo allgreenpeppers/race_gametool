@@ -169,6 +169,96 @@ void drawLine(
   }
 }
 
+int _floorDiv(int value, int divisor) {
+  final quotient = value ~/ divisor;
+  return value < 0 && value % divisor != 0 ? quotient - 1 : quotient;
+}
+
+/// The top/left edge of the origin-aligned mosaic cell containing [coordinate].
+int mosaicCellStart(int coordinate, int origin, int tileSize) {
+  final size = tileSize.clamp(1, 32).toInt();
+  return origin + _floorDiv(coordinate - origin, size) * size;
+}
+
+/// Paints the mosaic cell containing ([x], [y]). The checkerboard origin is
+/// ([originX], [originY]), so its A/B pattern stays fixed for an entire
+/// stroke. A transparent [secondaryColor] deliberately skips B cells instead
+/// of erasing what was already there.
+void stampMosaicCell(
+  Uint32List buf,
+  int w,
+  int h,
+  int x,
+  int y,
+  int primaryColor,
+  int secondaryColor, {
+  required int originX,
+  required int originY,
+  int tileSize = 1,
+  Uint8List? mask,
+}) {
+  final size = tileSize.clamp(1, 32).toInt();
+  final startX = mosaicCellStart(x, originX, size);
+  final startY = mosaicCellStart(y, originY, size);
+  final cellX = (startX - originX) ~/ size;
+  final cellY = (startY - originY) ~/ size;
+  final isPrimary = (cellX + cellY).isEven;
+  if (!isPrimary && (secondaryColor >>> 24) == 0) return;
+  final color = isPrimary ? primaryColor : secondaryColor;
+  for (var yy = startY; yy < startY + size; yy++) {
+    for (var xx = startX; xx < startX + size; xx++) {
+      _set(buf, w, h, xx, yy, color, mask);
+    }
+  }
+}
+
+/// Bresenham line that paints origin-aligned mosaic cells along its path.
+void drawMosaicLine(
+  Uint32List buf,
+  int w,
+  int h,
+  int x0,
+  int y0,
+  int x1,
+  int y1,
+  int primaryColor,
+  int secondaryColor, {
+  required int originX,
+  required int originY,
+  int tileSize = 1,
+  Uint8List? mask,
+}) {
+  var x = x0, y = y0;
+  final dx = (x1 - x0).abs(), dy = -(y1 - y0).abs();
+  final sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+  var err = dx + dy;
+  while (true) {
+    stampMosaicCell(
+      buf,
+      w,
+      h,
+      x,
+      y,
+      primaryColor,
+      secondaryColor,
+      originX: originX,
+      originY: originY,
+      tileSize: tileSize,
+      mask: mask,
+    );
+    if (x == x1 && y == y1) break;
+    final e2 = 2 * err;
+    if (e2 >= dy) {
+      err += dy;
+      x += sx;
+    }
+    if (e2 <= dx) {
+      err += dx;
+      y += sy;
+    }
+  }
+}
+
 /// Axis-aligned rectangle between two corners (any order), outline or filled.
 void drawRectShape(
   Uint32List buf,
