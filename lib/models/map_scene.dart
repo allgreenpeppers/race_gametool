@@ -1,3 +1,5 @@
+import 'control_point.dart';
+
 /// Where the player car starts, in grid coordinates plus a facing angle
 /// in radians (0 points right, positive rotates clockwise).
 class SpawnPoint {
@@ -66,6 +68,8 @@ class MapScene {
     required this.spawnPoint,
     this.placements = const [],
     this.islandTerrain = const [],
+    this.manualControlPointOffsets = const {},
+    this.userInsertedPoints = const [],
   });
 
   final String mapName;
@@ -75,6 +79,9 @@ class MapScene {
   /// Row-major terrain grid: 0 = water, 1 = grass island.
   /// islandTerrain[y][x], generated via Marching Squares in the editor.
   final List<List<int>> islandTerrain;
+
+  final Map<String, double> manualControlPointOffsets;
+  final List<ControlPoint> userInsertedPoints;
 
   factory MapScene.fromJson(Map<String, dynamic> json) => MapScene(
         mapName: json['mapName'] as String,
@@ -87,6 +94,13 @@ class MapScene {
             .map((row) =>
                 (row as List<dynamic>).map((v) => v as int).toList())
             .toList(),
+        manualControlPointOffsets: Map<String, double>.from(
+            (json['manualControlPointOffsets'] as Map<dynamic, dynamic>?)?.map(
+                    (k, v) => MapEntry(k as String, (v as num).toDouble())) ??
+                {}),
+        userInsertedPoints: (json['userInsertedPoints'] as List<dynamic>? ?? [])
+            .map((p) => ControlPoint.fromJson(p as Map<String, dynamic>))
+            .toList(),
       );
 
   Map<String, dynamic> toJson() => {
@@ -94,6 +108,8 @@ class MapScene {
         'spawnPoint': spawnPoint.toJson(),
         'placements': placements.map((p) => p.toJson()).toList(),
         'islandTerrain': islandTerrain,
+        'manualControlPointOffsets': manualControlPointOffsets,
+        'userInsertedPoints': userInsertedPoints.map((p) => p.toJson()).toList(),
       };
 
   MapScene copyWith({
@@ -101,11 +117,17 @@ class MapScene {
     SpawnPoint? spawnPoint,
     List<BlockPlacement>? placements,
     List<List<int>>? islandTerrain,
+    Map<String, double>? manualControlPointOffsets,
+    List<ControlPoint>? userInsertedPoints,
   }) =>
       MapScene(
         mapName: mapName ?? this.mapName,
         spawnPoint: spawnPoint ?? this.spawnPoint,
         placements: placements ?? this.placements,
         islandTerrain: islandTerrain ?? this.islandTerrain,
+        manualControlPointOffsets:
+            manualControlPointOffsets ?? this.manualControlPointOffsets,
+        userInsertedPoints: userInsertedPoints ?? this.userInsertedPoints,
       );
 }
+

@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
+import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,7 +11,12 @@ import '../logic/island_tiles.dart';
 import '../models/block_def.dart';
 import '../models/map_scene.dart';
 import '../models/port.dart';
+import '../models/geometry.dart';
 import 'app_providers.dart';
+
+import '../models/control_point.dart';
+import '../logic/track_boundaries.dart';
+import '../logic/track_topology.dart';
 
 /// Interaction tools for the Phase 2 level canvas.
 enum LevelTool {
@@ -178,6 +183,8 @@ class LevelEditorState {
     this.islandBrushRadius = 0,
     this.isDirty = false,
     this.currentFilePath,
+    this.manualControlPointOffsets = const {},
+    this.userInsertedPoints = const [],
   });
 
   final String mapName;
@@ -225,14 +232,17 @@ class LevelEditorState {
   /// Manually brushed island grass/water mask.
   final Set<(int, int)>? islandGrassMask;
 
-  /// History stack for the Undo feature: (placements, spawn, islandGrassMask).
-  final List<(List<BlockPlacement>, SpawnPoint?, Set<(int, int)>?)> undoStack;
+  /// History stack for the Undo feature: (placements, spawn, islandGrassMask, manualControlPointOffsets, userInsertedPoints).
+  final List<(List<BlockPlacement>, SpawnPoint?, Set<(int, int)>?, Map<String, double>, List<ControlPoint>)> undoStack;
 
   /// Radius of the island paint/erase brush in cells (0 = 1x1, 1 = 3x3, etc.)
   final int islandBrushRadius;
 
   final bool isDirty;
   final String? currentFilePath;
+
+  final Map<String, double> manualControlPointOffsets;
+  final List<ControlPoint> userInsertedPoints;
 
   /// All highlighted placements: the multi-selection plus any single
   /// selection from the other tools.
@@ -256,10 +266,12 @@ class LevelEditorState {
     PortDirection? spawnFacing,
     String? Function()? statusMessage,
     Set<(int, int)>? Function()? islandGrassMask,
-    List<(List<BlockPlacement>, SpawnPoint?, Set<(int, int)>?)>? undoStack,
+    List<(List<BlockPlacement>, SpawnPoint?, Set<(int, int)>?, Map<String, double>, List<ControlPoint>)>? undoStack,
     int? islandBrushRadius,
     bool? isDirty,
     String? Function()? currentFilePath,
+    Map<String, double>? manualControlPointOffsets,
+    List<ControlPoint>? userInsertedPoints,
   }) =>
       LevelEditorState(
         mapName: mapName ?? this.mapName,
@@ -293,11 +305,14 @@ class LevelEditorState {
         isDirty: isDirty ?? this.isDirty,
         currentFilePath:
             currentFilePath != null ? currentFilePath() : this.currentFilePath,
+        manualControlPointOffsets:
+            manualControlPointOffsets ?? this.manualControlPointOffsets,
+        userInsertedPoints: userInsertedPoints ?? this.userInsertedPoints,
       );
 }
 
 class LevelEditorNotifier extends Notifier<LevelEditorState> {
-  final Random _random = Random();
+  final math.Random _random = math.Random();
 
   @override
   LevelEditorState build() => const LevelEditorState();
@@ -306,8 +321,10 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
     final currentPlacements = state.placements;
     final currentSpawn = state.spawn;
     final currentGrassMask = state.islandGrassMask;
+    final currentOffsets = state.manualControlPointOffsets;
+    final currentUserPts = state.userInsertedPoints;
 
-    final newStack = [...state.undoStack, (currentPlacements, currentSpawn, currentGrassMask)];
+    final newStack = [...state.undoStack, (currentPlacements, currentSpawn, currentGrassMask, currentOffsets, currentUserPts)];
     if (newStack.length > 50) {
       newStack.removeAt(0);
     }
@@ -320,12 +337,14 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
       return;
     }
     final history = [...state.undoStack];
-    final (prevPlacements, prevSpawn, prevGrassMask) = history.removeLast();
+    final (prevPlacements, prevSpawn, prevGrassMask, prevOffsets, prevUserPts) = history.removeLast();
 
     state = state.copyWith(
       placements: prevPlacements,
       spawn: () => prevSpawn,
       islandGrassMask: () => prevGrassMask,
+      manualControlPointOffsets: prevOffsets,
+      userInsertedPoints: prevUserPts,
       undoStack: history,
       selectedPlacementIndex: () => null,
       selection: const {},
@@ -1002,11 +1021,14 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
     }
     // If clearing island layer, also clear islandGrassMask
     final nextMask = (layer == MapLayer.island) ? null : state.islandGrassMask;
+    final clearCP = (layer == MapLayer.track || layer == MapLayer.function);
     state = state.copyWith(
       placements: kept,
       selectedPlacementIndex: () => null,
       selection: const {},
       islandGrassMask: () => nextMask,
+      manualControlPointOffsets: clearCP ? const {} : state.manualControlPointOffsets,
+      userInsertedPoints: clearCP ? const [] : state.userInsertedPoints,
       statusMessage: () => 'Cleared ${layer.label} layer',
     );
   }
@@ -1018,6 +1040,8 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
       selectedPlacementIndex: () => null,
       selection: const {},
       islandGrassMask: () => null,
+      manualControlPointOffsets: const {},
+      userInsertedPoints: const [],
       statusMessage: () => 'Cleared all placements',
     );
   }
@@ -1413,6 +1437,8 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
             const SpawnPoint(gridX: 0, gridY: 0, facingAngle: 0),
         placements: state.placements,
         islandTerrain: const [],
+        manualControlPointOffsets: state.manualControlPointOffsets,
+        userInsertedPoints: state.userInsertedPoints,
       );
 
   Future<void> openGameLevel(String path) async {
@@ -1429,6 +1455,8 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
       mapName: scene.mapName,
       placements: scene.placements,
       spawn: () => scene.spawnPoint,
+      manualControlPointOffsets: scene.manualControlPointOffsets,
+      userInsertedPoints: scene.userInsertedPoints,
       undoStack: const [],
       selectedPlacementIndex: () => null,
       selection: const {},
@@ -1520,6 +1548,252 @@ class LevelEditorNotifier extends Notifier<LevelEditorState> {
 
   /// Exports the scene to a map_NN.json file chosen by the user (kept for convenience/compatibility).
   Future<void> exportMap() => saveAs();
+
+  void startControlPointDrag() {
+    _saveToHistory();
+  }
+
+  void updateControlPointOffset(String id, double offset) {
+    if (id.startsWith('auto_')) {
+      final nextOffsets = Map<String, double>.from(state.manualControlPointOffsets);
+      nextOffsets[id] = offset;
+      state = state.copyWith(
+        manualControlPointOffsets: nextOffsets,
+        isDirty: true,
+      );
+    } else {
+      final idx = state.userInsertedPoints.indexWhere((p) => p.id == id);
+      if (idx != -1) {
+        final updated = state.userInsertedPoints[idx].copyWith(offset: offset);
+        final nextList = List<ControlPoint>.from(state.userInsertedPoints);
+        nextList[idx] = updated;
+        state = state.copyWith(
+          userInsertedPoints: nextList,
+          isDirty: true,
+        );
+      }
+    }
+  }
+
+  void removeControlPoint(String id) {
+    if (!id.startsWith('auto_')) {
+      _saveToHistory();
+      final nextList = state.userInsertedPoints.where((p) => p.id != id).toList();
+      state = state.copyWith(
+        userInsertedPoints: nextList,
+        isDirty: true,
+        statusMessage: () => 'Removed manual control point',
+      );
+    }
+  }
+
+  void insertControlPointAt(double px, double py) {
+    final seams = findSeams(state.placements, _def);
+    final runs = findTrackRuns(state.placements, _def, seams);
+    final cpAutoMap = state.manualControlPointOffsets;
+
+    double bestDist = double.infinity;
+    int bestIdx = -1;
+    BoundarySide bestSide = BoundarySide.left;
+    double bestT = 0.0;
+    Vec2 bestBase = const Vec2(0, 0);
+    Vec2 bestDir = const Vec2(0, 0);
+
+    for (final run in runs) {
+      if (run.placementIndices.isEmpty) continue;
+
+      Vec2 getSeamBoundaryPos(
+        int idx,
+        int portIdx,
+        PortDirection outDir,
+        BoundarySide side,
+      ) {
+        final autoId = "auto_${idx}_${portIdx}_${side.name}";
+        final customOffset = cpAutoMap[autoId];
+        final placement = state.placements[idx];
+        final def = _def(placement.blockId)!;
+        final port = def.ports[portIdx];
+        final (defaultLeft, defaultRight) = computePortBoundaryPoints(placement, port, outDir, def);
+        final basePos = side == BoundarySide.left ? defaultLeft : defaultRight;
+        final offsetVal = customOffset ?? 0.0;
+        final (leftVec, rightVec) = perpendicularDirections(outDir);
+        final dir = side == BoundarySide.left ? leftVec : rightVec;
+        return basePos + dir.scale(offsetVal);
+      }
+
+      for (var i = 0; i < run.placementIndices.length; i++) {
+        final idx = run.placementIndices[i];
+        final def = _def(state.placements[idx].blockId)!;
+        if (!isStraightBlock(def)) continue;
+
+        // Entry seam
+        TrackSeamTransition? entryTrans;
+        TrackSeamTransition? exitTrans;
+        if (run.isLoop) {
+          entryTrans = run.transitions[(i - 1 + run.transitions.length) % run.transitions.length];
+          exitTrans = run.transitions[i];
+        } else {
+          if (i > 0) entryTrans = run.transitions[i - 1];
+          if (i < run.transitions.length) exitTrans = run.transitions[i];
+        }
+
+        Vec2 entryLeft;
+        Vec2 entryRight;
+        if (entryTrans != null) {
+          final portIdx = entryTrans.toIndex == idx ? entryTrans.toPort : entryTrans.fromPort;
+          final outDir = entryTrans.toIndex == idx ? entryTrans.seam.dir.opposite : entryTrans.seam.dir;
+          entryLeft = getSeamBoundaryPos(idx, portIdx, outDir, BoundarySide.left);
+          entryRight = getSeamBoundaryPos(idx, portIdx, outDir, BoundarySide.right);
+        } else {
+          final connectedPort = exitTrans?.fromPort;
+          final openPortIdx = (exitTrans == null) ? 0 : ((connectedPort == 0) ? 1 : 0);
+          final port = def.ports[openPortIdx];
+          final outDir = port.direction;
+          final (defaultLeft, defaultRight) = computePortBoundaryPoints(state.placements[idx], port, outDir, def);
+          entryLeft = defaultLeft;
+          entryRight = defaultRight;
+        }
+
+        Vec2 exitLeft;
+        Vec2 exitRight;
+        if (exitTrans != null) {
+          final portIdx = exitTrans.fromIndex == idx ? exitTrans.fromPort : exitTrans.toPort;
+          final outDir = exitTrans.fromIndex == idx ? exitTrans.seam.dir : exitTrans.seam.dir.opposite;
+          exitLeft = getSeamBoundaryPos(idx, portIdx, outDir, BoundarySide.left);
+          exitRight = getSeamBoundaryPos(idx, portIdx, outDir, BoundarySide.right);
+        } else {
+          final connectedPort = entryTrans?.toPort;
+          final openPortIdx = (entryTrans == null) ? 1 : ((connectedPort == 0) ? 1 : 0);
+          final port = def.ports[openPortIdx];
+          final outDir = port.direction;
+          final (defaultLeft, defaultRight) = computePortBoundaryPoints(state.placements[idx], port, outDir, def);
+          exitLeft = defaultLeft;
+          exitRight = defaultRight;
+        }
+
+        final p = Vec2(px, py);
+        final (distL, tL, projL) = _projectPointToSegment(p, entryLeft, exitLeft);
+        if (distL < bestDist) {
+          bestDist = distL;
+          bestIdx = idx;
+          bestSide = BoundarySide.left;
+          bestT = tL;
+
+          final (defaultEntryL, _) = entryTrans != null
+              ? computePortBoundaryPoints(
+                  state.placements[idx],
+                  def.ports[entryTrans.toIndex == idx ? entryTrans.toPort : entryTrans.fromPort],
+                  entryTrans.toIndex == idx ? entryTrans.seam.dir.opposite : entryTrans.seam.dir,
+                  def,
+                )
+              : computePortBoundaryPoints(
+                  state.placements[idx],
+                  def.ports[(exitTrans == null) ? 0 : ((exitTrans.fromPort == 0) ? 1 : 0)],
+                  def.ports[(exitTrans == null) ? 0 : ((exitTrans.fromPort == 0) ? 1 : 0)].direction,
+                  def,
+                );
+
+          final (defaultExitL, _) = exitTrans != null
+              ? computePortBoundaryPoints(
+                  state.placements[idx],
+                  def.ports[exitTrans.fromIndex == idx ? exitTrans.fromPort : exitTrans.toPort],
+                  exitTrans.fromIndex == idx ? exitTrans.seam.dir : exitTrans.seam.dir.opposite,
+                  def,
+                )
+              : computePortBoundaryPoints(
+                  state.placements[idx],
+                  def.ports[(entryTrans == null) ? 1 : ((entryTrans.toPort == 0) ? 1 : 0)],
+                  def.ports[(entryTrans == null) ? 1 : ((entryTrans.toPort == 0) ? 1 : 0)].direction,
+                  def,
+                );
+
+          bestBase = defaultEntryL + (defaultExitL - defaultEntryL).scale(tL);
+          final (leftVec, _) = perpendicularDirections(def.ports[1].direction);
+          bestDir = leftVec;
+        }
+
+        final (distR, tR, projR) = _projectPointToSegment(p, entryRight, exitRight);
+        if (distR < bestDist) {
+          bestDist = distR;
+          bestIdx = idx;
+          bestSide = BoundarySide.right;
+          bestT = tR;
+
+          final (_, defaultEntryR) = entryTrans != null
+              ? computePortBoundaryPoints(
+                  state.placements[idx],
+                  def.ports[entryTrans.toIndex == idx ? entryTrans.toPort : entryTrans.fromPort],
+                  entryTrans.toIndex == idx ? entryTrans.seam.dir.opposite : entryTrans.seam.dir,
+                  def,
+                )
+              : computePortBoundaryPoints(
+                  state.placements[idx],
+                  def.ports[(exitTrans == null) ? 0 : ((exitTrans.fromPort == 0) ? 1 : 0)],
+                  def.ports[(exitTrans == null) ? 0 : ((exitTrans.fromPort == 0) ? 1 : 0)].direction,
+                  def,
+                );
+
+          final (_, defaultExitR) = exitTrans != null
+              ? computePortBoundaryPoints(
+                  state.placements[idx],
+                  def.ports[exitTrans.fromIndex == idx ? exitTrans.fromPort : exitTrans.toPort],
+                  exitTrans.fromIndex == idx ? exitTrans.seam.dir : exitTrans.seam.dir.opposite,
+                  def,
+                )
+              : computePortBoundaryPoints(
+                  state.placements[idx],
+                  def.ports[(entryTrans == null) ? 1 : ((entryTrans.toPort == 0) ? 1 : 0)],
+                  def.ports[(entryTrans == null) ? 1 : ((entryTrans.toPort == 0) ? 1 : 0)].direction,
+                  def,
+                );
+
+          bestBase = defaultEntryR + (defaultExitR - defaultEntryR).scale(tR);
+          final (_, rightVec) = perpendicularDirections(def.ports[1].direction);
+          bestDir = rightVec;
+        }
+      }
+    }
+
+    if (bestDist < 16.0) {
+      _saveToHistory();
+      final id = "user_${bestIdx}_${bestSide.name}_${DateTime.now().microsecondsSinceEpoch}";
+      final clickP = Vec2(px, py);
+      final toClick = clickP - bestBase;
+      final initialOffset = toClick.x * bestDir.x + toClick.y * bestDir.y;
+
+      final newPt = ControlPoint(
+        id: id,
+        baseX: bestBase.x,
+        baseY: bestBase.y,
+        dirX: bestDir.x,
+        dirY: bestDir.y,
+        offset: initialOffset,
+        isAuto: false,
+        placementIndex: bestIdx,
+        side: bestSide,
+        edgeT: bestT,
+      );
+
+      state = state.copyWith(
+        userInsertedPoints: [...state.userInsertedPoints, newPt],
+        isDirty: true,
+        statusMessage: () => 'Inserted manual control point',
+      );
+    }
+  }
+
+  (double, double, Vec2) _projectPointToSegment(Vec2 p, Vec2 a, Vec2 b) {
+    final ab = b - a;
+    final ap = p - a;
+    final abLenSq = ab.x * ab.x + ab.y * ab.y;
+    if (abLenSq == 0) return ( (p - a).hashCode.toDouble(), 0.0, a );
+    var t = (ap.x * ab.x + ap.y * ab.y) / abLenSq;
+    t = t.clamp(0.0, 1.0);
+    final proj = a + ab.scale(t);
+    final diff = p - proj;
+    final dist = math.sqrt(diff.x * diff.x + diff.y * diff.y);
+    return (dist, t, proj);
+  }
 }
 
 /// One independent level-editor instance per open Phase 2 tab, keyed by the

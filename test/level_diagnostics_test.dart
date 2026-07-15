@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:race_gametool/logic/level_diagnostics.dart';
 import 'package:race_gametool/models/block_def.dart';
+import 'package:race_gametool/models/geometry.dart';
 import 'package:race_gametool/models/map_scene.dart';
 import 'package:race_gametool/models/port.dart';
 
@@ -134,5 +135,68 @@ void main() {
     );
     expect(diags.single.severity, DiagnosticSeverity.error);
     expect(diags.single.message, contains('Unknown block'));
+  });
+
+  test('control line touching track area is reported as an error', () {
+    final straightDef = BlockDef(
+      id: 'road_straight',
+      boundingBox: const BoundingBox(width: 5, height: 5),
+      spriteSheetRect: const SpriteSheetRect(x: 0, y: 0, w: 80, h: 80),
+      category: BlockCategory.track,
+      ports: const [
+        Port(localGridX: 0, localGridY: 0, direction: PortDirection.left, span: 5),
+        Port(localGridX: 4, localGridY: 0, direction: PortDirection.right, span: 5),
+      ],
+      physicsTrackArea: const [
+        Vec2(0, 16),
+        Vec2(80, 16),
+        Vec2(80, 64),
+        Vec2(0, 64),
+      ],
+    );
+
+    final cornerDef = BlockDef(
+      id: 'road_corner',
+      boundingBox: const BoundingBox(width: 5, height: 5),
+      spriteSheetRect: const SpriteSheetRect(x: 0, y: 0, w: 80, h: 80),
+      category: BlockCategory.track,
+      ports: const [
+        Port(localGridX: 0, localGridY: 0, direction: PortDirection.left, span: 5),
+        Port(localGridX: 0, localGridY: 4, direction: PortDirection.down, span: 5),
+      ],
+      physicsTrackArea: const [
+        Vec2(0, 16),
+        Vec2(64, 16),
+        Vec2(64, 80),
+        Vec2(0, 80),
+      ],
+    );
+
+    final diagsNormal = validateLevel(
+      const [
+        BlockPlacement(blockId: 'road_straight', gridX: 0, gridY: 0),
+        BlockPlacement(blockId: 'road_corner', gridX: 5, gridY: 0),
+      ],
+      libOf([straightDef, cornerDef]),
+    );
+    expect(
+      diagsNormal.where((d) => d.message.contains('touches track area')),
+      isEmpty,
+    );
+
+    final diagsCollision = validateLevel(
+      const [
+        BlockPlacement(blockId: 'road_straight', gridX: 0, gridY: 0),
+        BlockPlacement(blockId: 'road_corner', gridX: 5, gridY: 0),
+      ],
+      libOf([straightDef, cornerDef]),
+      manualControlPointOffsets: const {
+        'auto_0_1_left': -30.0,
+      },
+    );
+    final errors = diagsCollision.where((d) => d.message.contains('touches track area'));
+    expect(errors, isNotEmpty);
+    expect(errors.first.severity, DiagnosticSeverity.error);
+    expect(errors.first.placementIndex, 0);
   });
 }

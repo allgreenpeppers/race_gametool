@@ -8,6 +8,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants.dart';
 import '../../models/block_def.dart';
 import '../../models/map_scene.dart';
+import '../../models/control_point.dart';
+import '../../models/port.dart';
+import '../../models/geometry.dart';
+import '../../logic/track_boundaries.dart';
+import '../../logic/track_topology.dart';
 import '../../state/app_providers.dart';
 import '../../state/level_editor_providers.dart';
 import '../widgets/block_thumbnail.dart';
@@ -37,6 +42,135 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
 
   final TransformationController _transform = TransformationController();
   bool _centered = false;
+  Offset? _hoverLocalPos;
+  final GlobalKey _canvasKey = GlobalKey();
+
+  (double, Vec2, double, int, BoundarySide)? _findClosestEdge(
+      Offset localPos,
+      List<BlockPlacement> placements,
+      BlockDef? Function(String) defOf,
+      List<Seam> seams,
+      Map<String, double> manualOffsets) {
+    final runs = findTrackRuns(placements, defOf, seams);
+    double bestDist = double.infinity;
+    Vec2 bestProj = const Vec2(0, 0);
+    double bestT = 0.0;
+    int bestIdx = -1;
+    BoundarySide bestSide = BoundarySide.left;
+
+    final cpAutoMap = manualOffsets;
+
+    for (final run in runs) {
+      if (run.placementIndices.isEmpty) continue;
+
+      Vec2 getSeamBoundaryPos(
+        int idx,
+        int portIdx,
+        PortDirection outDir,
+        BoundarySide side,
+      ) {
+        final autoId = "auto_${idx}_${portIdx}_${side.name}";
+        final customOffset = cpAutoMap[autoId];
+        final placement = placements[idx];
+        final def = defOf(placement.blockId)!;
+        final port = def.ports[portIdx];
+        final (defaultLeft, defaultRight) = computePortBoundaryPoints(placement, port, outDir, def);
+        final basePos = side == BoundarySide.left ? defaultLeft : defaultRight;
+        final offsetVal = customOffset ?? 0.0;
+        final (leftVec, rightVec) = perpendicularDirections(outDir);
+        final dir = side == BoundarySide.left ? leftVec : rightVec;
+        return basePos + dir.scale(offsetVal);
+      }
+
+      for (var i = 0; i < run.placementIndices.length; i++) {
+        final idx = run.placementIndices[i];
+        final def = defOf(placements[idx].blockId)!;
+        if (!isStraightBlock(def)) continue;
+
+        TrackSeamTransition? entryTrans;
+        TrackSeamTransition? exitTrans;
+        if (run.isLoop) {
+          entryTrans = run.transitions[(i - 1 + run.transitions.length) % run.transitions.length];
+          exitTrans = run.transitions[i];
+        } else {
+          if (i > 0) entryTrans = run.transitions[i - 1];
+          if (i < run.transitions.length) exitTrans = run.transitions[i];
+        }
+
+        Vec2 entryLeft;
+        Vec2 entryRight;
+        if (entryTrans != null) {
+          final portIdx = entryTrans.toIndex == idx ? entryTrans.toPort : entryTrans.fromPort;
+          final outDir = entryTrans.toIndex == idx ? entryTrans.seam.dir.opposite : entryTrans.seam.dir;
+          entryLeft = getSeamBoundaryPos(idx, portIdx, outDir, BoundarySide.left);
+          entryRight = getSeamBoundaryPos(idx, portIdx, outDir, BoundarySide.right);
+        } else {
+          final connectedPort = exitTrans?.fromPort;
+          final openPortIdx = (exitTrans == null) ? 0 : ((connectedPort == 0) ? 1 : 0);
+          final port = def.ports[openPortIdx];
+          final outDir = port.direction;
+          final (defaultLeft, defaultRight) = computePortBoundaryPoints(placements[idx], port, outDir, def);
+          entryLeft = defaultLeft;
+          entryRight = defaultRight;
+        }
+
+        Vec2 exitLeft;
+        Vec2 exitRight;
+        if (exitTrans != null) {
+          final portIdx = exitTrans.fromIndex == idx ? exitTrans.fromPort : exitTrans.toPort;
+          final outDir = exitTrans.fromIndex == idx ? exitTrans.seam.dir : exitTrans.seam.dir.opposite;
+          exitLeft = getSeamBoundaryPos(idx, portIdx, outDir, BoundarySide.left);
+          exitRight = getSeamBoundaryPos(idx, portIdx, outDir, BoundarySide.right);
+        } else {
+          final connectedPort = entryTrans?.toPort;
+          final openPortIdx = (entryTrans == null) ? 1 : ((connectedPort == 0) ? 1 : 0);
+          final port = def.ports[openPortIdx];
+          final outDir = port.direction;
+          final (defaultLeft, defaultRight) = computePortBoundaryPoints(placements[idx], port, outDir, def);
+          exitLeft = defaultLeft;
+          exitRight = defaultRight;
+        }
+
+        final p = Vec2(localPos.dx, localPos.dy);
+
+        final (distL, tL, projL) = _projectPointToSegmentLocal(p, entryLeft, exitLeft);
+        if (distL < bestDist) {
+          bestDist = distL;
+          bestProj = projL;
+          bestT = tL;
+          bestIdx = idx;
+          bestSide = BoundarySide.left;
+        }
+
+        final (distR, tR, projR) = _projectPointToSegmentLocal(p, entryRight, exitRight);
+        if (distR < bestDist) {
+          bestDist = distR;
+          bestProj = projR;
+          bestT = tR;
+          bestIdx = idx;
+          bestSide = BoundarySide.right;
+        }
+      }
+    }
+
+    if (bestDist < 16.0) {
+      return (bestDist, bestProj, bestT, bestIdx, bestSide);
+    }
+    return null;
+  }
+
+  (double, double, Vec2) _projectPointToSegmentLocal(Vec2 p, Vec2 a, Vec2 b) {
+    final ab = b - a;
+    final ap = p - a;
+    final abLenSq = ab.x * ab.x + ab.y * ab.y;
+    if (abLenSq == 0) return ( (p - a).hashCode.toDouble(), 0.0, a );
+    var t = (ap.x * ab.x + ap.y * ab.y) / abLenSq;
+    t = t.clamp(0.0, 1.0);
+    final proj = a + ab.scale(t);
+    final diff = p - proj;
+    final dist = math.sqrt(diff.x * diff.x + diff.y * diff.y);
+    return (dist, t, proj);
+  }
 
   @override
   void initState() {
@@ -156,11 +290,28 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
         ? notifier.occupiedCells()
         : null;
 
+    final seams = findSeams(state.placements, library.blockById);
+    final controlPoints = generateControlPoints(
+      placements: state.placements,
+      defOf: library.blockById,
+      seams: seams,
+      manualOffsets: state.manualControlPointOffsets,
+      userInsertedPoints: state.userInsertedPoints,
+    );
+
+    final closestEdge = (state.activeLayer == MapLayer.function && _hoverLocalPos != null)
+        ? _findClosestEdge(_hoverLocalPos!, state.placements, library.blockById, seams, state.manualControlPointOffsets)
+        : null;
+
 
 
     void handleTap(Offset local, Offset global) {
       Focus.of(context).requestFocus();
       final (x, y) = _toCell(local);
+      if (state.activeLayer == MapLayer.function) {
+        notifier.insertControlPointAt(local.dx, local.dy);
+        return;
+      }
       switch (state.tool) {
         case LevelTool.stamp:
           if (state.activeLayer == MapLayer.island) {
@@ -273,88 +424,139 @@ class _LevelCanvasState extends ConsumerState<LevelCanvas> {
           }
         },
         child: MouseRegion(
-          onHover: (event) => notifier.setHover(_toCell(event.localPosition)),
-          onExit: (_) => notifier.setHover(null),
-          child: RawGestureDetector(
-            gestures: {
-              if (usesDrag)
-                LeftClickPanGestureRecognizer: GestureRecognizerFactoryWithHandlers<LeftClickPanGestureRecognizer>(
-                  () => LeftClickPanGestureRecognizer(
-                    allowedButtonsFilter: (int buttons) => buttons == kPrimaryButton,
-                  ),
-                  (LeftClickPanGestureRecognizer instance) {
-                    instance
-                      ..onStart = (d) {
-                        Focus.of(context).requestFocus();
-                        final (x, y) = _toCell(d.localPosition);
-                        if (state.tool == LevelTool.multi) {
-                          notifier.multiDragStart(x, y);
-                        } else if (state.tool == LevelTool.stamp &&
-                            state.activeLayer == MapLayer.track) {
-                          // Track only: dragging pulls a straight run of
-                          // the selected block, committed on release.
-                          notifier.stampDragStart(x, y);
-                        } else {
-                          handleDragCell((x, y));
-                        }
-                      }
-                      ..onUpdate = (d) {
-                        final (x, y) = _toCell(d.localPosition);
-                        if (state.tool == LevelTool.multi) {
-                          notifier.multiDragUpdate(x, y);
-                        } else if (state.tool == LevelTool.stamp &&
-                            state.activeLayer == MapLayer.track) {
-                          notifier.stampDragUpdate(x, y);
-                        } else {
-                          handleDragCell((x, y));
-                        }
-                      }
-                      ..onEnd = (_) {
-                        if (state.tool == LevelTool.multi) {
-                          notifier.multiDragEnd(
-                              cols: LevelCanvas.cols, rows: LevelCanvas.rows);
-                        } else if (state.tool == LevelTool.stamp) {
-                          if (state.activeLayer == MapLayer.track) {
-                            notifier.stampDragEnd();
-                          } else if (state.activeLayer != MapLayer.island) {
-                            final hover = state.hoverCell;
-                            if (hover != null) {
-                              notifier.stampAt(hover.$1, hover.$2);
-                            }
+          onHover: (event) {
+            notifier.setHover(_toCell(event.localPosition));
+            setState(() {
+              _hoverLocalPos = event.localPosition;
+            });
+          },
+          onExit: (_) {
+            notifier.setHover(null);
+            setState(() {
+              _hoverLocalPos = null;
+            });
+          },
+          child: GestureDetector(
+            onSecondaryTapUp: (d) {
+              if (state.activeLayer == MapLayer.function) {
+                notifier.insertControlPointAt(d.localPosition.dx, d.localPosition.dy);
+              }
+            },
+            child: RawGestureDetector(
+              gestures: {
+                if (usesDrag)
+                  LeftClickPanGestureRecognizer: GestureRecognizerFactoryWithHandlers<LeftClickPanGestureRecognizer>(
+                    () => LeftClickPanGestureRecognizer(
+                      allowedButtonsFilter: (int buttons) => buttons == kPrimaryButton,
+                    ),
+                    (LeftClickPanGestureRecognizer instance) {
+                      instance
+                        ..onStart = (d) {
+                          Focus.of(context).requestFocus();
+                          final (x, y) = _toCell(d.localPosition);
+                          if (state.tool == LevelTool.multi) {
+                            notifier.multiDragStart(x, y);
+                          } else if (state.tool == LevelTool.stamp &&
+                              state.activeLayer == MapLayer.track) {
+                            notifier.stampDragStart(x, y);
+                          } else {
+                            handleDragCell((x, y));
                           }
                         }
-                      };
+                        ..onUpdate = (d) {
+                          final (x, y) = _toCell(d.localPosition);
+                          if (state.tool == LevelTool.multi) {
+                            notifier.multiDragUpdate(x, y);
+                          } else if (state.tool == LevelTool.stamp &&
+                              state.activeLayer == MapLayer.track) {
+                            notifier.stampDragUpdate(x, y);
+                          } else {
+                            handleDragCell((x, y));
+                          }
+                        }
+                        ..onEnd = (_) {
+                          if (state.tool == LevelTool.multi) {
+                            notifier.multiDragEnd(
+                                cols: LevelCanvas.cols, rows: LevelCanvas.rows);
+                          } else if (state.tool == LevelTool.stamp) {
+                            if (state.activeLayer == MapLayer.track) {
+                              notifier.stampDragEnd();
+                            } else if (state.activeLayer != MapLayer.island) {
+                              final hover = state.hoverCell;
+                              if (hover != null) {
+                                notifier.stampAt(hover.$1, hover.$2);
+                              }
+                            }
+                          }
+                        };
+                    },
+                  ),
+                TapGestureRecognizer: GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+                  () => TapGestureRecognizer(
+                    allowedButtonsFilter: (int buttons) => buttons == kPrimaryButton,
+                  ),
+                  (TapGestureRecognizer instance) {
+                    instance.onTapUp = (d) => handleTap(d.localPosition, d.globalPosition);
                   },
                 ),
-              TapGestureRecognizer: GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
-                () => TapGestureRecognizer(
-                  allowedButtonsFilter: (int buttons) => buttons == kPrimaryButton,
-                ),
-                (TapGestureRecognizer instance) {
-                  instance.onTapUp = (d) => handleTap(d.localPosition, d.globalPosition);
-                },
-              ),
-            },
-            child: CustomPaint(
-              size: const Size(
-                  LevelCanvas.cols * _cell, LevelCanvas.rows * _cell),
-              painter: _LevelPainter(
-                blocks: library,
-                placements: state.placements,
-                tool: state.tool,
-                hoverCell: state.hoverCell,
-                stampId: state.selectedPaletteId,
-                rectOf: notifier.rectOf,
-                occupied: occupied,
-                extendPreview: state.extendPreview,
-                stampDragPreview: state.stampDragPreview,
-                selection: state.highlighted,
-                marquee: state.marquee,
-                groupDelta: state.groupDelta,
-                spawn: state.spawn,
-                activeLayer: state.activeLayer,
-                islandGrassMask: state.islandGrassMask,
-                islandBrushRadius: state.islandBrushRadius,
+              },
+              child: Stack(
+                children: [
+                  CustomPaint(
+                    key: _canvasKey,
+                    size: const Size(
+                        LevelCanvas.cols * _cell, LevelCanvas.rows * _cell),
+                    painter: _LevelPainter(
+                      blocks: library,
+                      placements: state.placements,
+                      tool: state.tool,
+                      hoverCell: state.hoverCell,
+                      stampId: state.selectedPaletteId,
+                      rectOf: notifier.rectOf,
+                      occupied: occupied,
+                      extendPreview: state.extendPreview,
+                      stampDragPreview: state.stampDragPreview,
+                      selection: state.highlighted,
+                      marquee: state.marquee,
+                      groupDelta: state.groupDelta,
+                      spawn: state.spawn,
+                      activeLayer: state.activeLayer,
+                      islandGrassMask: state.islandGrassMask,
+                      islandBrushRadius: state.islandBrushRadius,
+                      controlPoints: controlPoints,
+                    ),
+                  ),
+                  if (state.activeLayer == MapLayer.function) ...[
+                    if (closestEdge != null)
+                      Positioned(
+                        left: closestEdge.$2.x - 6.0,
+                        top: closestEdge.$2.y - 6.0,
+                        child: IgnorePointer(
+                          child: Container(
+                            width: 12.0,
+                            height: 12.0,
+                            decoration: BoxDecoration(
+                              color: closestEdge.$5 == BoundarySide.left
+                                  ? Colors.cyan.withValues(alpha: 0.5)
+                                  : Colors.orange.withValues(alpha: 0.5),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.5), width: 1.5),
+                            ),
+                          ),
+                        ),
+                      ),
+                    for (final cp in controlPoints)
+                      _ControlPointHandle(
+                        key: ValueKey(cp.id),
+                        controlPoint: cp,
+                        canvasKey: _canvasKey,
+                        onDragStart: notifier.startControlPointDrag,
+                        onDragUpdate: (newOffset) => notifier.updateControlPointOffset(cp.id, newOffset),
+                        onDelete: () => notifier.removeControlPoint(cp.id),
+                      ),
+                  ],
+                ],
               ),
             ),
           ),
@@ -382,6 +584,7 @@ class _LevelPainter extends CustomPainter {
     required this.activeLayer,
     required this.islandGrassMask,
     required this.islandBrushRadius,
+    required this.controlPoints,
   });
 
   final AssetLibrary blocks;
@@ -400,6 +603,7 @@ class _LevelPainter extends CustomPainter {
   final MapLayer activeLayer;
   final Set<(int, int)>? islandGrassMask;
   final int islandBrushRadius;
+  final List<ControlPoint> controlPoints;
 
   static const _cell = GridConstants.cellSize;
 
@@ -437,6 +641,7 @@ class _LevelPainter extends CustomPainter {
     }
 
     _paintAlignmentGuides(canvas, size);
+    _paintTrackBoundaries(canvas, size);
     _paintStampGhost(canvas);
     // The Connect extender shows a clickable "+" per ghost; the drag-stamp
     // run is committed on release, so it renders ghosts only.
@@ -445,6 +650,51 @@ class _LevelPainter extends CustomPainter {
     _paintGroupMove(canvas);
     _paintMarquee(canvas);
     _paintSpawn(canvas);
+  }
+
+  void _paintTrackBoundaries(Canvas canvas, Size size) {
+    final seams = findSeams(placements, blocks.blockById);
+    final boundaries = buildBoundaryPolylines(
+      placements: placements,
+      defOf: blocks.blockById,
+      seams: seams,
+      controlPoints: controlPoints,
+    );
+
+    final leftLines = boundaries['left'] ?? [];
+    final rightLines = boundaries['right'] ?? [];
+
+    final leftPaint = Paint()
+      ..color = activeLayer == MapLayer.function
+          ? Colors.cyan.withValues(alpha: 0.85)
+          : Colors.cyan.withValues(alpha: 0.35)
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke;
+
+    final rightPaint = Paint()
+      ..color = activeLayer == MapLayer.function
+          ? Colors.orange.withValues(alpha: 0.85)
+          : Colors.orange.withValues(alpha: 0.35)
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke;
+
+    for (final line in leftLines) {
+      if (line.isEmpty) continue;
+      final path = Path()..moveTo(line.first.x, line.first.y);
+      for (var i = 1; i < line.length; i++) {
+        path.lineTo(line[i].x, line[i].y);
+      }
+      canvas.drawPath(path, leftPaint);
+    }
+
+    for (final line in rightLines) {
+      if (line.isEmpty) continue;
+      final path = Path()..moveTo(line.first.x, line.first.y);
+      for (var i = 1; i < line.length; i++) {
+        path.lineTo(line[i].x, line[i].y);
+      }
+      canvas.drawPath(path, rightPaint);
+    }
   }
 
   void _paintAlignmentGuides(Canvas canvas, Size size) {
@@ -853,7 +1103,8 @@ class _LevelPainter extends CustomPainter {
       old.spawn != spawn ||
       old.activeLayer != activeLayer ||
       old.islandGrassMask != islandGrassMask ||
-      old.islandBrushRadius != islandBrushRadius;
+      old.islandBrushRadius != islandBrushRadius ||
+      old.controlPoints != controlPoints;
 }
 
 class LeftClickPanGestureRecognizer extends PanGestureRecognizer {
@@ -864,5 +1115,90 @@ class LeftClickPanGestureRecognizer extends PanGestureRecognizer {
   @override
   void addAllowedPointerPanZoom(PointerPanZoomStartEvent event) {
     // Ignore trackpad pan-zoom events so they fall through to InteractiveViewer.
+  }
+}
+
+class _ControlPointHandle extends StatefulWidget {
+  const _ControlPointHandle({
+    super.key,
+    required this.controlPoint,
+    required this.canvasKey,
+    required this.onDragStart,
+    required this.onDragUpdate,
+    required this.onDelete,
+  });
+
+  final ControlPoint controlPoint;
+  final GlobalKey canvasKey;
+  final VoidCallback onDragStart;
+  final ValueChanged<double> onDragUpdate;
+  final VoidCallback onDelete;
+
+  @override
+  State<_ControlPointHandle> createState() => _ControlPointHandleState();
+}
+
+class _ControlPointHandleState extends State<_ControlPointHandle> {
+  bool _isHovered = false;
+  bool _isDragging = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final cp = widget.controlPoint;
+    final color = cp.isAuto
+        ? ( (_isHovered || _isDragging) ? Colors.cyanAccent : Colors.cyan )
+        : ( (_isHovered || _isDragging) ? Colors.orangeAccent : Colors.orange );
+
+    final size = (_isHovered || _isDragging) ? 16.0 : 12.0;
+
+    return Positioned(
+      left: cp.position.x - size / 2,
+      top: cp.position.y - size / 2,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.precise,
+        onEnter: (_) => setState(() => _isHovered = true),
+        onExit: (_) => setState(() => _isHovered = false),
+        child: GestureDetector(
+          onPanStart: (_) {
+            setState(() => _isDragging = true);
+            widget.onDragStart();
+          },
+          onPanUpdate: (d) {
+            final renderBox = widget.canvasKey.currentContext?.findRenderObject() as RenderBox?;
+            if (renderBox != null) {
+              final localPos = renderBox.globalToLocal(d.globalPosition);
+              final dx = localPos.dx - cp.baseX;
+              final dy = localPos.dy - cp.baseY;
+              final newOffset = dx * cp.dirX + dy * cp.dirY;
+              widget.onDragUpdate(newOffset);
+            }
+          },
+          onPanEnd: (_) {
+            setState(() => _isDragging = false);
+          },
+          onSecondaryTap: () {
+            if (!cp.isAuto) {
+              widget.onDelete();
+            }
+          },
+          child: Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 1.5),
+              boxShadow: const [
+                BoxShadow(
+                  color: Colors.black45,
+                  blurRadius: 4.0,
+                  offset: Offset(0, 2),
+                )
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
